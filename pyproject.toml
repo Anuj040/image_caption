@@ -8,6 +8,8 @@ authors = ["Anuj040 <anujarora920804@gmail.com>"]
 python = "^3.8"
 
 [tool.poetry.dev-dependencies]
+pylint = "^2.11.1"
+black = {version = "^21.9b0", allow-prereleases = true}
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
