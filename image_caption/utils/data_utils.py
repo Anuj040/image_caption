@@ -1,3 +1,4 @@
+"""utilities for data processing"""
 import os
 
 import numpy as np
@@ -19,7 +20,7 @@ def load_captions_data(
         text_data: List containing all the available captions
     """
 
-    with open(filepath) as caption_file:
+    with open(filepath, "r", encoding="utf-8") as caption_file:
         caption_data = caption_file.readlines()
         caption_mapping = {}
         text_data = []

@@ -1,22 +1,30 @@
 """data generator module"""
 import os
+import random
 import re
+from typing import Callable, List
 
 import spacy
-from image_caption.utils.data_utils import load_captions_data
+import torch
+from PIL import Image
 
 SPACY_ENG = spacy.load("en_core_web_sm")
+# pylint: disable = wrong-import-position
+from image_caption.utils.data_utils import load_captions_data
+
+random.seed(111)
 
 
 class Vocabulary:
     """Vocabulary building object"""
 
-    def __init__(self, freq_threshold: int):
+    def __init__(self, freq_threshold: int, standardize: Callable):
         """Initializer
 
         Args:
             freq_threshold (int): Neglect words with occurence less than the threshold
         """
+        self.standardize = standardize
 
         self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
         self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
@@ -26,11 +34,17 @@ class Vocabulary:
     def __len__(self):
         return len(self.itos)
 
-    @staticmethod
-    def tokenizer_eng(text):
+    def tokenizer_eng(self, text):
+        """creates a token vector from a literal phrase"""
+        text = self.standardize(text)
         return [tok.text.lower() for tok in SPACY_ENG.tokenizer(text)]
 
-    def build_vocabulary(self, sentences):
+    def build_vocabulary(self, sentences: List[str]) -> None:
+        """Builds integer key-word and vice-versa dictionaries
+
+        Args:
+            sentences (List[str]): list of phrases
+        """
         idx = 4
         frequency = {}
 
@@ -46,7 +60,15 @@ class Vocabulary:
                     self.stoi[word] = idx
                     idx += 1
 
-    def numericalize(self, sentence):
+    def numericalize(self, sentence: str) -> List[int]:
+        """returns a vector of integers representing individual word in a phrase
+
+        Args:
+            sentence (str): input string
+
+        Returns:
+            List[int]: vector representation of the string
+        """
         tokenized_text = self.tokenizer_eng(sentence)
 
         return [
@@ -55,16 +77,28 @@ class Vocabulary:
         ]
 
 
+# pylint: disable = too-many-arguments
 class CaptionDataset:
+    """Prepares the flicker image caption dataset (base)"""
+
     def __init__(
         self,
-        root_dir="datasets",
-        caption_file="Flickr8k.token.txt",
-        freq_threshold=5,
+        root_dir: str = "datasets",
+        caption_file: str = "Flickr8k.token.txt",
+        freq_threshold: int = 5,
         transform=None,
-        vocab_size: int = 10000,
         seq_length: int = 25,
     ) -> None:
+        """Initializes
+
+        Args:
+            root_dir (str, optional): Defaults to "datasets".
+            caption_file (str, optional): name of the captions file.
+                    Defaults to "Flickr8k.token.txt".
+            freq_threshold (int, optional): Neglect words with occurence less than the threshold
+            transform ([type], optional): Image transformations Defaults to None.
+            seq_length (int, optional): max caption length for the dataset prep. Defaults to 25.
+        """
         self.freq_threshold = freq_threshold
         self.transform = transform
         self.root_dir = root_dir
@@ -77,30 +111,48 @@ class CaptionDataset:
             caption_path, images_path, max_seq_length=seq_length
         )
 
-        self.captions = captions_mapping.values()
-        self.images = captions_mapping.keys()
+        self.captions = captions_mapping
+        self.images = list(captions_mapping.keys())
 
-        self.vocab = Vocabulary(freq_threshold)
-        self.vocab.build_vocabulary(text_data)
-
-        strip_chars = "!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
+        # strip specific characters from the string
+        strip_chars = r"!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
         strip_chars = strip_chars.replace("<", "")
         self.strip_chars = strip_chars.replace(">", "")
 
-        # # Vocabulary size
-        # self.vocab_size = vocab_size
+        self.vocab = Vocabulary(freq_threshold, self.custom_standardization)
+        self.vocab.build_vocabulary(text_data)
 
         # # Fixed length allowed for any sequence
         # self.seq_len = seq_length
 
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        image = self.images[index]
+        caption = random.choice(self.captions[image])
+
+        img = Image.open(image).convert("RGB")
+
+        if self.transform:
+            img = self.transform(img)
+
+        numericalized_caption = [self.vocab.stoi["<SOS>"]]
+        numericalized_caption += self.vocab.numericalize(caption)
+        numericalized_caption.append(self.vocab.stoi["<EOS>"])
+
+        return img, torch.Tensor(numericalized_caption)
+
     def custom_standardization(self, input_string):
-        return re.sub("[%s]" % re.escape(self.strip_chars), "", input_string)
+        """custom function for removing certain specific substrings from the phrase"""
+        return re.sub(f"[{re.escape(self.strip_chars)}]", "", input_string)
 
 
 if __name__ == "__main__":
     dataset = CaptionDataset()
 
-    out = dataset.custom_standardization(
-        "A toddler in blue shorts is laying face down on the wet ground ."
-    )
-    print(out)
+    out = dataset[100]
+    import numpy as np
+
+    out[0].show()
+    print([dataset.vocab.itos[key] for key in np.array(out[1])])
