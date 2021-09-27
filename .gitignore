@@ -1,0 +1,11 @@
+# Folders
+datasets
+.venv
+.vscode
+
+# poetry files
+poetry.lock
+
+# Binaries
+.DS_Store
+__pycache__/
