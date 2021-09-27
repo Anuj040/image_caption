@@ -1,7 +1,10 @@
 """utilities for data processing"""
 import os
+from typing import Tuple
 
 import numpy as np
+
+np.random.seed(123)
 
 
 def load_captions_data(
@@ -59,7 +62,9 @@ def load_captions_data(
         return caption_mapping, text_data
 
 
-def train_val_split(caption_data, train_size=0.8, shuffle=True):
+def train_val_split(
+    caption_data: dict, train_size: float = 0.8, shuffle: bool = True
+) -> Tuple[dict]:
     """Split the captioning dataset into train and validation sets.
 
     Args:

@@ -10,7 +10,7 @@ from PIL import Image
 
 SPACY_ENG = spacy.load("en_core_web_sm")
 # pylint: disable = wrong-import-position
-from image_caption.utils.data_utils import load_captions_data
+from image_caption.utils.data_utils import load_captions_data, train_val_split
 
 random.seed(111)
 
@@ -88,6 +88,7 @@ class CaptionDataset:
         freq_threshold: int = 5,
         transform=None,
         seq_length: int = 25,
+        split: str = "train",
     ) -> None:
         """Initializes
 
@@ -98,6 +99,7 @@ class CaptionDataset:
             freq_threshold (int, optional): Neglect words with occurence less than the threshold
             transform ([type], optional): Image transformations Defaults to None.
             seq_length (int, optional): max caption length for the dataset prep. Defaults to 25.
+            split (str): data split to return
         """
         self.freq_threshold = freq_threshold
         self.transform = transform
@@ -110,9 +112,10 @@ class CaptionDataset:
         captions_mapping, text_data = load_captions_data(
             caption_path, images_path, max_seq_length=seq_length
         )
+        train_data, valid_data = train_val_split(captions_mapping)
+        self.captions = train_data if split == "train" else valid_data
 
-        self.captions = captions_mapping
-        self.images = list(captions_mapping.keys())
+        self.images = list(self.captions.keys())
 
         # strip specific characters from the string
         strip_chars = r"!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
