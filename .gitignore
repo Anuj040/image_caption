@@ -8,3 +8,4 @@ poetry.lock
 
 # Binaries
 .DS_Store
+__pycache__/
