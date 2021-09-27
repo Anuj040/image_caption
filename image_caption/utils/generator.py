@@ -133,6 +133,8 @@ class CaptionDataset:
 
     def __getitem__(self, index):
         image = self.images[index]
+
+        #! TODO: check if the model can work with all captions
         caption = random.choice(self.captions[image])
 
         img = Image.open(image).convert("RGB")
@@ -151,7 +153,7 @@ class CaptionDataset:
         return re.sub(f"[{re.escape(self.strip_chars)}]", "", input_string)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     dataset = CaptionDataset()
 
     out = dataset[100]
