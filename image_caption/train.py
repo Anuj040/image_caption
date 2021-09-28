@@ -137,11 +137,11 @@ class Caption:
         ).to(DEVICE)
 
         # Prepare the optimizer & loss functions
-        lr = 3e-4
+        lrate = 3e-4
         optimizer = Adam(
             [
-                {"params": self.encoder.parameters(), "lr": lr},
-                {"params": self.decoder.parameters(), "lr": lr},
+                {"params": self.encoder.parameters(), "lr": lrate},
+                {"params": self.decoder.parameters(), "lr": lrate},
             ]
         )
         scaler = GradScaler(enabled=torch.cuda.is_available())
