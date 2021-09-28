@@ -7,6 +7,9 @@ import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
+# check if cuda available
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 class CNNModel(nn.Module):
 
@@ -103,7 +106,7 @@ class PositionalEmbedding(nn.Module):
         #! Try train short, test long: https://arxiv.org/abs/2108.12409
         self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
-        self.embed_scale = torch.sqrt(torch.Tensor(embed_dim))
+        self.embed_scale = torch.sqrt(torch.Tensor(embed_dim)).to(DEVICE)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
