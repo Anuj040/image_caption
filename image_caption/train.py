@@ -165,6 +165,7 @@ class Caption:
             self.encoder.train()
             self.decoder.train()
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
+                optimizer.step()
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
                 captions = captions.to(DEVICE)

@@ -106,7 +106,7 @@ class PositionalEmbedding(nn.Module):
         #! Try train short, test long: https://arxiv.org/abs/2108.12409
         self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
-        self.embed_scale = torch.sqrt(torch.Tensor(embed_dim)).to(DEVICE)
+        self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
