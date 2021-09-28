@@ -174,7 +174,7 @@ class Caption:
                 optimizer.zero_grad()
                 del img_embed, imgs, captions
 
-                if (i + 1) % int(10 * 2 / batch_size) == 0:
+                if (i + 1) % int(10 * 64 / batch_size) == 0:
                     writer.add_scalar("loss", loss, step)
                     writer.add_scalar("acc", acc, step)
             # Evaluation step
