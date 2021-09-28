@@ -97,7 +97,7 @@ class Caption:
         )
         valid_loader = DataLoader(
             dataset=valid_dataset,
-            batch_size=32,
+            batch_size=4,
             num_workers=num_workers,
             shuffle=False,
             pin_memory=True,
@@ -174,7 +174,7 @@ class Caption:
                 optimizer.zero_grad()
                 del img_embed, imgs, captions
 
-                if (i + 1) % int(10 * 64 / batch_size) == 0:
+                if (i + 1) % int(10 * 8 / batch_size) == 0:
                     writer.add_scalar("loss", loss, step)
                     writer.add_scalar("acc", acc, step)
             # Evaluation step
