@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import transforms
@@ -144,6 +145,10 @@ class Caption:
                 {"params": self.decoder.parameters(), "lr": lrate},
             ]
         )
+        scheduler = OneCycleLR(
+            optimizer, max_lr=lrate, steps_per_epoch=len(train_loader), epochs=epochs
+        )
+
         scaler = GradScaler(enabled=torch.cuda.is_available())
         self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
@@ -172,6 +177,8 @@ class Caption:
                 scaler.update()
 
                 optimizer.zero_grad()
+                scheduler.step()
+
                 del img_embed, imgs, captions
 
                 if (i + 1) % int(10 * 8 / batch_size) == 0:
