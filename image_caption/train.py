@@ -182,7 +182,7 @@ class Caption:
 
                 del img_embed, imgs, captions
 
-                if (i + 1) % int(10 * 8 / batch_size) == 0:
+                if (i + 1) % int(20 * 8 / batch_size) == 0:
                     writer.add_scalar("loss", loss, step)
                     writer.add_scalar("acc", acc, step)
             # Evaluation step
