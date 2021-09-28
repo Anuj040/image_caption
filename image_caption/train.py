@@ -1,10 +1,16 @@
 """model definition, train procedure and the essentials"""
+import datetime
+import os
 from typing import Tuple
 
 import torch
 from torch import nn
+from torch.cuda.amp import GradScaler, autocast
+from torch.optim import Adam
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import transforms
+from tqdm import tqdm
 
 from image_caption.models import (
     CNNModel,
@@ -16,7 +22,8 @@ from image_caption.utils.generator import CaptionDataset, Collate
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
+# pylint: disable = too-many-locals, attribute-defined-outside-init, not-callable
+# pylint: disable = too-many-instance-attributes
 class Caption:
     """object for preparing model definition, train procedure and the essentials"""
 
@@ -35,9 +42,8 @@ class Caption:
 
         self.trainable = trainable
 
-    @staticmethod
     def generators(
-        seq_length: int, batch_size: int, num_workers: int = 8
+        self, seq_length: int, batch_size: int, num_workers: int = 8
     ) -> Tuple[int, DataLoader, DataLoader]:
         """prepares data loader objects for model training and evaluation
 
@@ -50,10 +56,11 @@ class Caption:
             Tuple[int, DataLoader, DataLoader]: [description]
         """
         # Data augmentation for image data
+        image_size = (64, 64)
         train_transform = transforms.Compose(
             [
                 transforms.Resize((356, 356)),
-                transforms.RandomCrop((224, 224)),
+                transforms.RandomCrop(image_size),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ToTensor(),
                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -61,7 +68,7 @@ class Caption:
         )
         valid_transform = transforms.Compose(
             [
-                transforms.Resize((224, 224)),
+                transforms.Resize(image_size),
                 transforms.ToTensor(),
                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
@@ -70,6 +77,11 @@ class Caption:
         # Prepare the dataloaders
         train_dataset = CaptionDataset(seq_length=seq_length, transform=train_transform)
         vocab_size = len(train_dataset.vocab)
+
+        self.ignore_indices = [
+            train_dataset.vocab.stoi["<PAD>"],
+            train_dataset.vocab.stoi["<UNK>"],
+        ]
         pad_value = train_dataset.vocab.stoi["<PAD>"]
 
         train_loader = DataLoader(
@@ -94,7 +106,11 @@ class Caption:
         return vocab_size, train_loader, valid_loader
 
     def train(
-        self, seq_length: int = 25, batch_size: int = 64, num_workers: int = 8
+        self,
+        seq_length: int = 25,
+        epochs: int = 10,
+        batch_size: int = 64,
+        num_workers: int = 8,
     ) -> None:
         """preparation of model definitions and execute train/valid step
 
@@ -107,12 +123,12 @@ class Caption:
 
         # Model definitions
         cnn_model: nn.Module = CNNModel(trainable=self.trainable).to(DEVICE)
-        encoder: nn.Module = TransformerEncoderBlock(
+        self.encoder: nn.Module = TransformerEncoderBlock(
             self.image_embed_size,
             num_heads=self.num_heads,
             input_embed_size=self.input_embed_size,
         ).to(DEVICE)
-        decoder: nn.Module = TransformerDecoderBlock(
+        self.decoder: nn.Module = TransformerDecoderBlock(
             vocab_size,
             seq_length,
             self.image_embed_size,
@@ -120,38 +136,99 @@ class Caption:
             2 * self.num_heads,
         ).to(DEVICE)
 
-        # for epoch in range(num_epochs):
-        #     if save_model:
-        #         checkpoint = {
-        #             "state_dict": model.state_dict(),
-        #             "optimizer": model.state_dict(),
-        #             "step": step,
-        #         }
-        #         save_checkpoint(checkpoint)
+        # Prepare the optimizer & loss functions
+        optimizer = Adam(
+            [
+                {"params": self.encoder.parameters(), "lr": 1e-4},
+                {"params": self.decoder.parameters(), "lr": 1e-4},
+            ]
+        )
+        scaler = GradScaler(enabled=torch.cuda.is_available())
+        self.loss = nn.CrossEntropyLoss()
 
-        #     #     for idx, (imgs, captions) in tqdm(
-        #     #         enumerate(loader), total=len(loader), leave=False
-        #     #     ):
-        #     for idx, (imgs, captions) in enumerate(loader):
-        #         imgs = imgs.to(device)
-        #         captions = captions.to(device)
+        # Logging and checkpoints
+        now = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
+        if not os.path.exists(f"checkpoint/{now}"):
+            os.makedirs(f"checkpoint/{now}")
+        writer = SummaryWriter(f"log/{now}")
 
-        #         score = model(imgs, captions[:-1])
+        # Initialize validation loss
+        valid_loss = 1e9
+        # Run loop
+        for epoch in range(0, 1):
 
-        #         #         print(score.shape, captions.shape)
-        #         #         print(score.reshape(-1, score.shape[2]).shape, captions.reshape(-1).shape)
-        #         #         print("why are we reshaping it here?")
-        #         optimizer.zero_grad()
-        #         loss = loss_criterion(
-        #             score.reshape(-1, score.shape[2]), captions.reshape(-1)
-        #         )
+            self.encoder.train()
+            self.decoder.train()
+            for i, (imgs, captions) in enumerate(tqdm(train_loader)):
+                imgs = imgs.to(DEVICE)
+                captions = captions.to(DEVICE)
 
-        #         step += 1
+                with autocast(enabled=torch.cuda.is_available()):
+                    img_embed = cnn_model(imgs)
+                    loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-        #         loss.backward()
-        #         optimizer.step()
-        #     print(f"Loss for epoch {epoch}: {loss}")
+                optimizer.zero_grad()
+
+    def calculate_loss(
+        self, y_true: torch.Tensor, y_pred: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """calculates the error between prediction and ground truth
+
+        Args:
+            y_true (torch.Tensor): target sequence
+            y_pred (torch.Tensor): predicted sequence prob. matrix (N * vocab_size * seq_len)
+            mask (torch.Tensor):
+
+        Returns:
+            torch.Tensor: loss value
+        """
+        mask = mask.to(dtype=float)
+        loss = self.loss(y_pred, y_true) * mask
+        return torch.sum(loss) / torch.sum(mask)
+
+    @staticmethod
+    def calculate_accuracy(
+        y_true: torch.Tensor, y_pred: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """calculates the accuracy metric for prediction and ground truth
+
+        Args:
+            y_true (torch.Tensor): target sequence
+            y_pred (torch.Tensor): predicted sequence prob. matrix (N * vocab_size * seq_len)
+            mask (torch.Tensor):
+
+        Returns:
+            torch.Tensor: loss value
+        """
+        accuracy = torch.eq(y_true, torch.argmax(y_pred, axis=1))
+        accuracy = torch.logical_and(mask, accuracy).to(float)
+        return torch.sum(accuracy) / torch.sum(mask.to(float))
+
+    def _compute_caption_loss_and_acc(
+        self, img_embed: torch.Tensor, batch_seq: torch.Tensor
+    ) -> Tuple[torch.Tensor]:
+
+        encoder_out = self.encoder(img_embed)
+        batch_seq_inp = batch_seq[:, :-1]
+        batch_seq_true = batch_seq[:, 1:].long()
+
+        # Ignore tokens <UNK>, <PAD>, etc.
+        mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
+        for token_index in self.ignore_indices[1:]:
+            temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
+            mask = torch.minimum(mask, temp_mask)
+
+        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask)
+        batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
+        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
+        acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
+
+        return loss, acc
 
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False)
+    model.train(batch_size=4)

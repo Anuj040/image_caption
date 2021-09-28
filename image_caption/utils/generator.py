@@ -2,13 +2,13 @@
 import os
 import random
 import re
-from typing import Callable, List
+from typing import Callable, List, Tuple
 
 import spacy
 import torch
 from PIL import Image
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
 SPACY_ENG = spacy.load("en_core_web_sm")
 # pylint: disable = wrong-import-position
@@ -30,7 +30,6 @@ class Vocabulary:
 
         self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
         self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
-        self.default_dict_len = len(self.stoi)
 
         self.freq_threshold = freq_threshold
 
@@ -149,7 +148,7 @@ class CaptionDataset(Dataset):
         numericalized_caption += self.vocab.numericalize(caption)
         numericalized_caption.append(self.vocab.stoi["<EOS>"])
 
-        return img, torch.Tensor(numericalized_caption)
+        return img, torch.Tensor(numericalized_caption).to(dtype=torch.int32)
 
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
@@ -167,12 +166,12 @@ class Collate:
         """
         self.pad_value = pad_value
 
-    def __call__(self, batch):
+    def __call__(self, batch: list) -> Tuple[torch.Tensor]:
+        """returns the batch from input lists"""
         imgs = [item[0].unsqueeze(0) for item in batch]
         img = torch.cat(imgs, dim=0)
         targets = [item[1] for item in batch]
         targets = pad_sequence(targets, batch_first=True, padding_value=self.pad_value)
-
         return img, targets
 
 
