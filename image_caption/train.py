@@ -56,7 +56,7 @@ class Caption:
             Tuple[int, DataLoader, DataLoader]: [description]
         """
         # Data augmentation for image data
-        image_size = (64, 64)
+        image_size = (224, 224)
         train_transform = transforms.Compose(
             [
                 transforms.Resize((356, 356)),
