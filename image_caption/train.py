@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import transforms
@@ -56,7 +57,7 @@ class Caption:
             Tuple[int, DataLoader, DataLoader]: [description]
         """
         # Data augmentation for image data
-        image_size = (64, 64)
+        image_size = (224, 224)
         train_transform = transforms.Compose(
             [
                 transforms.Resize((356, 356)),
@@ -97,7 +98,7 @@ class Caption:
         )
         valid_loader = DataLoader(
             dataset=valid_dataset,
-            batch_size=32,
+            batch_size=4,
             num_workers=num_workers,
             shuffle=False,
             pin_memory=True,
@@ -137,13 +138,17 @@ class Caption:
         ).to(DEVICE)
 
         # Prepare the optimizer & loss functions
-        lr = 3e-4
+        lrate = 3e-4
         optimizer = Adam(
             [
-                {"params": self.encoder.parameters(), "lr": lr},
-                {"params": self.decoder.parameters(), "lr": lr},
+                {"params": self.encoder.parameters(), "lr": lrate},
+                {"params": self.decoder.parameters(), "lr": lrate},
             ]
         )
+        scheduler = OneCycleLR(
+            optimizer, max_lr=lrate, steps_per_epoch=len(train_loader), epochs=epochs
+        )
+
         scaler = GradScaler(enabled=torch.cuda.is_available())
         self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
@@ -160,6 +165,7 @@ class Caption:
             self.encoder.train()
             self.decoder.train()
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
+                optimizer.step()
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
                 captions = captions.to(DEVICE)
@@ -172,9 +178,11 @@ class Caption:
                 scaler.update()
 
                 optimizer.zero_grad()
+                scheduler.step()
+
                 del img_embed, imgs, captions
 
-                if (i + 1) % int(10 * 2 / batch_size) == 0:
+                if (i + 1) % int(20 * 8 / batch_size) == 0:
                     writer.add_scalar("loss", loss, step)
                     writer.add_scalar("acc", acc, step)
             # Evaluation step
@@ -252,7 +260,7 @@ class Caption:
             temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
             mask = torch.minimum(mask, temp_mask)
 
-        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask)
+        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
