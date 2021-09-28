@@ -28,6 +28,7 @@ class Vocabulary:
 
         self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
         self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
+        self.default_dict_len = len(self.stoi)
 
         self.freq_threshold = freq_threshold
 
@@ -133,6 +134,8 @@ class CaptionDataset:
 
     def __getitem__(self, index):
         image = self.images[index]
+
+        #! TODO: check if the model can work with all captions
         caption = random.choice(self.captions[image])
 
         img = Image.open(image).convert("RGB")
@@ -151,7 +154,7 @@ class CaptionDataset:
         return re.sub(f"[{re.escape(self.strip_chars)}]", "", input_string)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     dataset = CaptionDataset()
 
     out = dataset[100]
