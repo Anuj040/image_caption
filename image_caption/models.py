@@ -1,4 +1,7 @@
-"""model architecures"""
+"""
+model architecures
+https://keras.io/examples/vision/image_captioning/#building-the-model
+"""
 
 import torch
 from efficientnet_pytorch import EfficientNet
@@ -162,7 +165,7 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
-        self.act_2 = nn.Softmax(dim=-1)
+        # self.act_2 = nn.Softmax(dim=-1)
         # self.supports_masking = True
 
     def forward(self, inputs, encoder_outputs, mask=None):
@@ -202,7 +205,8 @@ class TransformerDecoderBlock(nn.Module):
         ffn_out = self.layernorm_3(ffn_out + out_2)
 
         ffn_out = self.dropout_2(ffn_out)
-        preds = self.act_2(self.out(ffn_out))
+        preds = self.out(ffn_out)
+        # preds = self.act_2(self.out(ffn_out))
 
         # return preds
         return preds
