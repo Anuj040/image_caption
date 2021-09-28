@@ -2,6 +2,8 @@
 datasets
 .venv
 .vscode
+checkpoint
+log
 
 # poetry files
 poetry.lock
