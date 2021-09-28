@@ -1,4 +1,7 @@
-"""model architecures"""
+"""
+model architecures
+https://keras.io/examples/vision/image_captioning/#building-the-model
+"""
 
 import torch
 from efficientnet_pytorch import EfficientNet

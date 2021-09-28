@@ -137,29 +137,30 @@ class Caption:
         ).to(DEVICE)
 
         # Prepare the optimizer & loss functions
+        lr = 3e-4
         optimizer = Adam(
             [
-                {"params": self.encoder.parameters(), "lr": 1e-4},
-                {"params": self.decoder.parameters(), "lr": 1e-4},
+                {"params": self.encoder.parameters(), "lr": lr},
+                {"params": self.decoder.parameters(), "lr": lr},
             ]
         )
         scaler = GradScaler(enabled=torch.cuda.is_available())
-        self.loss = nn.CrossEntropyLoss()
+        self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
         # Logging and checkpoints
         now = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
-        if not os.path.exists(f"checkpoint/{now}"):
-            os.makedirs(f"checkpoint/{now}")
+        os.makedirs(f"checkpoint/{now}", exist_ok=True)
         writer = SummaryWriter(f"log/{now}")
 
         # Initialize validation loss
         valid_loss = 1e9
         # Run loop
-        for epoch in range(0, 1):
+        for epoch in range(0, epochs):
 
             self.encoder.train()
             self.decoder.train()
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
+                step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
                 captions = captions.to(DEVICE)
 
@@ -171,6 +172,24 @@ class Caption:
                 scaler.update()
 
                 optimizer.zero_grad()
+                del img_embed, imgs, captions
+
+                if (i + 1) % int(10 * 2 / batch_size) == 0:
+                    writer.add_scalar("loss", loss, step)
+                    writer.add_scalar("acc", acc, step)
+            # Evaluation step
+            current_val_loss = self.valid(cnn_model, valid_loader, writer, step)
+
+            if current_val_loss < valid_loss:
+                valid_loss = current_val_loss
+                torch.save(
+                    self.encoder.state_dict(),
+                    f"checkpoint/{now}/encoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
+                )
+                torch.save(
+                    self.decoder.state_dict(),
+                    f"checkpoint/{now}/decoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
+                )
 
     def calculate_loss(
         self, y_true: torch.Tensor, y_pred: torch.Tensor, mask: torch.Tensor
@@ -186,7 +205,7 @@ class Caption:
             torch.Tensor: loss value
         """
         mask = mask.to(dtype=float)
-        loss = self.loss(y_pred, y_true) * mask
+        loss = self.loss_fn(y_pred, y_true) * mask
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -210,6 +229,18 @@ class Caption:
     def _compute_caption_loss_and_acc(
         self, img_embed: torch.Tensor, batch_seq: torch.Tensor
     ) -> Tuple[torch.Tensor]:
+        """
+            1. uses image embeddings to predict the caption
+            2. prepares the mask for error and acc calculation
+            3. error and acc calc.
+
+        Args:
+            img_embed (torch.Tensor): image embeddings from feature extractor netowrk
+            batch_seq (torch.Tensor): ground truth sequence (captions)
+
+        Returns:
+            Tuple[torch.Tensor]: loss/acc values
+        """
 
         encoder_out = self.encoder(img_embed)
         batch_seq_inp = batch_seq[:, :-1]
@@ -225,10 +256,48 @@ class Caption:
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
+        del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
+        del mask, batch_seq_pred
 
         return loss, acc
+
+    def valid(
+        self, cnn_model: nn.Module, loader: DataLoader, writer: SummaryWriter, step: int
+    ) -> Tuple[float]:
+        """model evaluation step executor
+
+        Args:
+            cnn_model (nn.Module): image feature extracotor
+            dataloader (DataLoader): validation data loader
+            writer (SummaryWriter): tensorboard summary writer object
+            step (int): train step
+
+        Returns:
+            float: validation loss
+        """
+        self.encoder.eval()
+        self.decoder.eval()
+        loss_total = 0
+        loss_count = 0
+        acc_mean = 0
+        for (imgs, captions) in loader:
+            batch_size = imgs.size(0)
+            imgs = imgs.to(DEVICE)
+            captions = captions.to(DEVICE)
+            img_embed = cnn_model(imgs)
+
+            loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
+            del img_embed, imgs, captions
+
+        loss_total += loss.cpu().item() * batch_size
+        acc_mean += acc.cpu().item() * batch_size
+        loss_count += batch_size
+
+        writer.add_scalar("valid_loss", loss_total / loss_count, step)
+        writer.add_scalar("valid_acc", acc_mean / loss_count, step)
+        return loss_total / loss_count
 
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False)
-    model.train(batch_size=4)
+    model.train(epochs=10, batch_size=16)

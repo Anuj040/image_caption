@@ -1,4 +1,7 @@
-"""data generator module"""
+"""
+data generator module
+https://www.kaggle.com/fanbyprinciple/pytorch-image-captioning-with-flickr/notebook
+"""
 import os
 import random
 import re
