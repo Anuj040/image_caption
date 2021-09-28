@@ -111,7 +111,7 @@ class PositionalEmbedding(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
         length = inputs.shape[-1]
-        positions = torch.arange(0, length, step=1)
+        positions = torch.arange(0, length, step=1).to(DEVICE)
         embedded_tokens = self.token_embeddings(inputs)
         embedded_tokens = embedded_tokens * self.embed_scale
         embedded_positions = self.position_embeddings(positions)
@@ -223,7 +223,7 @@ class TransformerDecoderBlock(nn.Module):
         j = torch.arange(0, sequence_length)
         mask = (i >= j).to(dtype=float)
         mask = torch.reshape(mask, (1, input_shape[1], input_shape[1]))
-        return torch.tile(mask, [batch_size, 1, 1])
+        return torch.tile(mask, [batch_size, 1, 1]).to(DEVICE)
 
 
 if __name__ == "__main__":  # pragma: no cover

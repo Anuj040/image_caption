@@ -252,7 +252,7 @@ class Caption:
             temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
             mask = torch.minimum(mask, temp_mask)
 
-        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask)
+        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
