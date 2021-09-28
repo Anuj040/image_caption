@@ -7,6 +7,8 @@ from typing import Callable, List
 import spacy
 import torch
 from PIL import Image
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset
 
 SPACY_ENG = spacy.load("en_core_web_sm")
 # pylint: disable = wrong-import-position
@@ -79,7 +81,7 @@ class Vocabulary:
 
 
 # pylint: disable = too-many-arguments
-class CaptionDataset:
+class CaptionDataset(Dataset):
     """Prepares the flicker image caption dataset (base)"""
 
     def __init__(
@@ -152,6 +154,26 @@ class CaptionDataset:
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
         return re.sub(f"[{re.escape(self.strip_chars)}]", "", input_string)
+
+
+class Collate:
+    """process the list of samples to form a batch"""
+
+    def __init__(self, pad_value: int):
+        """intialize
+
+        Args:
+            pad_value (int): value to pad the sequence with
+        """
+        self.pad_value = pad_value
+
+    def __call__(self, batch):
+        imgs = [item[0].unsqueeze(0) for item in batch]
+        img = torch.cat(imgs, dim=0)
+        targets = [item[1] for item in batch]
+        targets = pad_sequence(targets, batch_first=True, padding_value=self.pad_value)
+
+        return img, targets
 
 
 if __name__ == "__main__":  # pragma: no cover
