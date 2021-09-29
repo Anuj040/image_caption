@@ -98,7 +98,6 @@ class PositionalEmbedding(nn.Module):
             embed_dim (int): embedding dimensions
         """
         super().__init__(**kwargs)
-        #! try pretrained embeddings
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
         #! Try train short, test long: https://arxiv.org/abs/2108.12409
         self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
