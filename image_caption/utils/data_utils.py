@@ -116,6 +116,7 @@ def data_downloader(path: str) -> None:
 
     # Cleaning # Remove .zip file
     os.remove(glove_path)
+    os.remove("wget-log")
 
 
 def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarray:
@@ -133,9 +134,16 @@ def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarr
     glove = pd.read_csv(glove_path, sep=" ", quoting=3, header=None, index_col=0)
     glove_embedding = {key: val.values for key, val in glove.T.items()}
 
-    embedding_matrix = np.zeros((len(vocab) + 1, embed_dim))
+    # Get the statistics of existing embeds
+    embedding_vals = np.vstack(list(glove_embedding.values()))
+    std = np.std(embedding_vals)
+    embed_mu = np.mean(embedding_vals)
+
+    # Initialize randomly to have random embeds for unavailbale tokens
+    embedding_matrix = embed_mu + std * np.random.randn(len(vocab) + 1, embed_dim)
 
     for word, index in vocab.stoi.items():
         if word in glove_embedding:
             embedding_matrix[index] = glove_embedding[word]
+
     return embedding_matrix
