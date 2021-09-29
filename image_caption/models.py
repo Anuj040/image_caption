@@ -60,9 +60,6 @@ class TransformerEncoderBlock(nn.Module):
             input_embed_size (int, optional): embedding size for input sequences Defaults to 1280.
         """
         super().__init__(**kwargs)
-        self.output_embed_size = output_embed_size
-        self.num_heads = num_heads
-
         self.attention_1 = nn.MultiheadAttention(
             output_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )

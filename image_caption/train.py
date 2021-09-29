@@ -18,6 +18,7 @@ from image_caption.models import (
     TransformerDecoderBlock,
     TransformerEncoderBlock,
 )
+from image_caption.utils.data_utils import prepare_embeddings
 from image_caption.utils.generator import CaptionDataset, Collate
 
 # check if cuda available
@@ -28,12 +29,9 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 class Caption:
     """object for preparing model definition, train procedure and the essentials"""
 
-    def __init__(
-        self,
-        trainable: bool,
-    ) -> None:
+    def __init__(self, trainable: bool, image_embed_size: int = 300) -> None:
         # Dimension for the image embeddings and token embeddings
-        self.image_embed_size: int = 512
+        self.image_embed_size: int = image_embed_size
         # Per-layer units in the feed-forward network
         self.ff_dim: int = 512
         # Heads for multihead attention for encoder network
@@ -104,7 +102,10 @@ class Caption:
             pin_memory=True,
             collate_fn=Collate(pad_value),
         )
-        return vocab_size, train_loader, valid_loader
+        embedding_matrix = prepare_embeddings(
+            "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
+        )
+        return vocab_size, train_loader, valid_loader, embedding_matrix
 
     def train(
         self,
@@ -118,7 +119,7 @@ class Caption:
         Args:
             seq_length (int, optional): Fixed length allowed for any sequence. Defaults to 25.
         """
-        vocab_size, train_loader, valid_loader = self.generators(
+        vocab_size, train_loader, valid_loader, embedding_matrix = self.generators(
             seq_length, batch_size, num_workers
         )
 
@@ -136,6 +137,11 @@ class Caption:
             self.ff_dim,
             2 * self.num_heads,
         ).to(DEVICE)
+
+        # Substitute pretrained embeddings for embedding layer
+        self.decoder.embedding.token_embeddings.weight = nn.Parameter(
+            torch.tensor(embedding_matrix, dtype=torch.float32)
+        )
 
         # Prepare the optimizer & loss functions
         lrate = 3e-4
@@ -308,4 +314,4 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False)
-    model.train(epochs=10, batch_size=16)
+    model.train(epochs=10, batch_size=4)
