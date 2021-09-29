@@ -1,5 +1,6 @@
 """utilities for data processing"""
 import os
+import zipfile
 from typing import Tuple
 
 import numpy as np
@@ -95,3 +96,22 @@ def train_val_split(
 
     # 4. Return the splits
     return training_data, validation_data
+
+
+def data_downloader(path: str) -> None:
+    """Method for downloading the dataset if not available at the directed location
+    Args:
+        path (str): Directed location
+    """
+    os.makedirs(path, exist_ok=True)
+    url = "http://nlp.stanford.edu/data/wordvecs/glove.6B.zip"
+    os.system(f"wget {url} -P {path}")
+
+    glove_path = os.path.join(path, "glove.6B.zip")
+
+    # Extrcting the contents of the downloaded file
+    with zipfile.ZipFile(glove_path, "r") as zip_ref:
+        zip_ref.extractall(path)
+
+    # Cleaning # Remove .zip file
+    os.remove(glove_path)
