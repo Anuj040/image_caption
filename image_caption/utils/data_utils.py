@@ -116,7 +116,6 @@ def data_downloader(path: str) -> None:
 
     # Cleaning # Remove .zip file
     os.remove(glove_path)
-    os.remove("wget-log")
 
 
 def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarray:

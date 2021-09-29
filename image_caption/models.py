@@ -100,6 +100,8 @@ class PositionalEmbedding(nn.Module):
         super().__init__(**kwargs)
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
         #! Try train short, test long: https://arxiv.org/abs/2108.12409
+        #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
+        #! course_UvA-DL/05-transformers-and-MH-attention.html
         self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
         self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)

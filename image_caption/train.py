@@ -145,7 +145,7 @@ class Caption:
         if self.use_pretrained:
             # Substitute pretrained embeddings for embedding layer
             self.decoder.embedding.token_embeddings.weight = nn.Parameter(
-                torch.tensor(embedding_matrix, dtype=torch.float32)
+                torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
             )
 
         # Prepare the optimizer & loss functions
