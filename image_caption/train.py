@@ -29,9 +29,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 class Caption:
     """object for preparing model definition, train procedure and the essentials"""
 
-    def __init__(self, trainable: bool, image_embed_size: int = 300) -> None:
+    def __init__(
+        self, trainable: bool, image_embed_size: int = 300, use_pretrained: bool = True
+    ) -> None:
         # Dimension for the image embeddings and token embeddings
         self.image_embed_size: int = image_embed_size
+        # Whether to use pretrained token embeddings
+        self.use_pretrained: bool = use_pretrained
         # Per-layer units in the feed-forward network
         self.ff_dim: int = 512
         # Heads for multihead attention for encoder network
@@ -138,10 +142,11 @@ class Caption:
             2 * self.num_heads,
         ).to(DEVICE)
 
-        # Substitute pretrained embeddings for embedding layer
-        self.decoder.embedding.token_embeddings.weight = nn.Parameter(
-            torch.tensor(embedding_matrix, dtype=torch.float32)
-        )
+        if self.use_pretrained:
+            # Substitute pretrained embeddings for embedding layer
+            self.decoder.embedding.token_embeddings.weight = nn.Parameter(
+                torch.tensor(embedding_matrix, dtype=torch.float32)
+            )
 
         # Prepare the optimizer & loss functions
         lrate = 3e-4

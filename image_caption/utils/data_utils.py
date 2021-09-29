@@ -131,6 +131,10 @@ def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarr
         np.ndarray: embedding matrix with row number corresponing to word index in vocab
     """
     glove_path = os.path.join(path, f"glove.6B.{embed_dim}d.txt")
+    # Check if the specified embeddings available
+    if not os.path.exists(glove_path):
+        data_downloader(path)
+
     glove = pd.read_csv(glove_path, sep=" ", quoting=3, header=None, index_col=0)
     glove_embedding = {key: val.values for key, val in glove.T.items()}
 
