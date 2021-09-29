@@ -4,6 +4,7 @@ import zipfile
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
 
 np.random.seed(123)
 
@@ -115,3 +116,26 @@ def data_downloader(path: str) -> None:
 
     # Cleaning # Remove .zip file
     os.remove(glove_path)
+
+
+def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarray:
+    """prepares pretrained token embeddings matrix
+
+    Args:
+        path (str): path to the embeddings file
+        vocab (dict): vocabulary object
+        embed_dim (int, optional): embedding dimensions for each word. Defaults to 100.
+
+    Returns:
+        np.ndarray: embedding matrix with row number corresponing to word index in vocab
+    """
+    glove_path = os.path.join(path, f"glove.6B.{embed_dim}d.txt")
+    glove = pd.read_csv(glove_path, sep=" ", quoting=3, header=None, index_col=0)
+    glove_embedding = {key: val.values for key, val in glove.T.items()}
+
+    embedding_matrix = np.zeros((len(vocab) + 1, embed_dim))
+
+    for word, index in vocab.stoi.items():
+        if word in glove_embedding:
+            embedding_matrix[index] = glove_embedding[word]
+    return embedding_matrix
