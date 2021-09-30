@@ -7,6 +7,8 @@ import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
+from image_caption.utils.model_utils import get_alibi_mask
+
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -50,7 +52,7 @@ class TransformerEncoderBlock(nn.Module):
         output_embed_size: int,
         num_heads: int,
         input_embed_size: int = 1280,
-        **kwargs
+        **kwargs,
     ):
         """initialize
 
@@ -89,29 +91,43 @@ class PositionalEmbedding(nn.Module):
     and adds positional embeddings to individual wordvectors
     """
 
-    def __init__(self, sequence_length: int, vocab_size: int, embed_dim: int, **kwargs):
+    def __init__(
+        self,
+        sequence_length: int,
+        vocab_size: int,
+        embed_dim: int,
+        use_alibi: bool = False,
+        **kwargs,
+    ):
         """initialize
 
         Args:
             sequence_length (int): sequence lengths
             vocab_size (int): total size of the vocabulary
             embed_dim (int): embedding dimensions
+            use_alibi (bool): Use positional embeddings or alibi mask
         """
         super().__init__(**kwargs)
+        self.use_alibi = use_alibi
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
-        #! Try train short, test long: https://arxiv.org/abs/2108.12409
-        #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
-        #! course_UvA-DL/05-transformers-and-MH-attention.html
-        self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
+
+        if not use_alibi:
+            #! Try train short, test long: https://arxiv.org/abs/2108.12409
+            #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
+            #! course_UvA-DL/05-transformers-and-MH-attention.html
+            self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
         self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
-        length = inputs.shape[-1]
-        positions = torch.arange(0, length, step=1).to(DEVICE)
         embedded_tokens = self.token_embeddings(inputs)
         embedded_tokens = embedded_tokens * self.embed_scale
+        if self.use_alibi:
+            return embedded_tokens
+
+        length = inputs.shape[-1]
+        positions = torch.arange(0, length, step=1).to(DEVICE)
         embedded_positions = self.position_embeddings(positions)
         return embedded_tokens + embedded_positions
 
@@ -130,6 +146,7 @@ class TransformerDecoderBlock(nn.Module):
         embed_dim: int,
         ff_dim: int,
         num_heads: int,
+        use_alibi: bool = False,
     ):
         """initialize
 
@@ -139,12 +156,17 @@ class TransformerDecoderBlock(nn.Module):
             embed_dim (int): dimensions for word embeddings
             ff_dim (int): Per-layer units in the feed-forward network
             num_heads (int): num of attention heads for Multihead attention
+            use_alibi (bool): Use positional embeddings or alibi mask
         """
         super().__init__()
         self.num_heads = num_heads
+        self.use_alibi = use_alibi
 
         self.embedding = PositionalEmbedding(
-            embed_dim=embed_dim, sequence_length=seq_length, vocab_size=vocab_size
+            embed_dim=embed_dim,
+            sequence_length=seq_length,
+            vocab_size=vocab_size,
+            use_alibi=use_alibi,
         )
 
         self.attention_1 = nn.MultiheadAttention(
@@ -172,14 +194,32 @@ class TransformerDecoderBlock(nn.Module):
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
         inputs = self.embedding(inputs)
-        causal_mask = self.get_causal_attention_mask(inputs)
-
+        padding_mask = None
         if mask is not None:
             padding_mask = 1.0 - torch.unsqueeze(mask, -1)
             padding_mask = torch.tile(padding_mask, [self.num_heads, 1, 1]).to(bool)
-            combined_mask = torch.unsqueeze(mask, 1)
-            combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
-            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
+            if self.use_alibi:
+                causal_mask = get_alibi_mask(inputs, self.num_heads)
+                combined_mask = 1.0 - torch.unsqueeze(mask, 1)
+                new_attn_mask = torch.zeros_like(combined_mask, dtype=torch.float)
+                new_attn_mask.masked_fill_(combined_mask.to(bool), float("-inf"))
+                new_attn_mask = torch.tile(new_attn_mask, [self.num_heads, 1, 1])
+                combined_mask = causal_mask + new_attn_mask
+            else:
+                causal_mask = self.get_causal_attention_mask(inputs)
+                combined_mask = torch.unsqueeze(mask, 1)
+                combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
+                combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
+                    bool
+                )
+        else:
+            if self.use_alibi:
+                combined_mask = get_alibi_mask(inputs, self.num_heads)
+            else:
+                combined_mask = 1.0 - self.get_causal_attention_mask(inputs)
+                combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
+                    bool
+                )
 
         attention_output_1, _ = self.attention_1(
             query=inputs,
