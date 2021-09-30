@@ -1,8 +1,9 @@
 """model definition, train procedure and the essentials"""
 import datetime
 import os
-from typing import Tuple
+from typing import Optional, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
@@ -47,16 +48,18 @@ class Caption:
 
     def generators(
         self, seq_length: int, batch_size: int, num_workers: int = 8
-    ) -> Tuple[int, DataLoader, DataLoader]:
+    ) -> Tuple[int, DataLoader, DataLoader, Optional[np.ndarray]]:
         """prepares data loader objects for model training and evaluation
 
         Args:
-            seq_length (int): [description]
+            seq_length (int): Fixed length allowed for any sequence.
             batch_size (int): [description]
             num_workers (int, optional): [description]. Defaults to 8.
 
         Returns:
-            Tuple[int, DataLoader, DataLoader]: [description]
+            int: Total size of the vocabulary
+            DataLoader, DataLoader: Train and validation dataset loaders
+            Optional[np.ndarray]: pretrained Embedding matrix
         """
         # Data augmentation for image data
         image_size = (224, 224)
@@ -106,6 +109,9 @@ class Caption:
             pin_memory=True,
             collate_fn=Collate(pad_value),
         )
+        if not self.use_pretrained:
+            return vocab_size, train_loader, valid_loader, None
+
         embedding_matrix = prepare_embeddings(
             "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
         )
