@@ -175,11 +175,11 @@ class TransformerDecoderBlock(nn.Module):
         causal_mask = self.get_causal_attention_mask(inputs)
 
         if mask is not None:
-            padding_mask = torch.unsqueeze(mask, -1)
-            padding_mask = torch.tile(padding_mask, [self.num_heads, 1, 1])
+            padding_mask = 1.0 - torch.unsqueeze(mask, -1)
+            padding_mask = torch.tile(padding_mask, [self.num_heads, 1, 1]).to(bool)
             combined_mask = torch.unsqueeze(mask, 1)
-            combined_mask = torch.minimum(combined_mask, causal_mask)
-            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1])
+            combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
+            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
 
         attention_output_1, _ = self.attention_1(
             query=inputs,
