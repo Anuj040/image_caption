@@ -7,7 +7,7 @@ import math
 import torch
 
 
-def get_slopes(num_heads: int):
+def get_slopes(num_heads: int) -> list:
     """
     Calculates head dependent linear bias scalar for multihead attention as described in
     Train Short, Test Long: Attention with Linear Biases (ALiBi) Enables Input Length Extrapolation
@@ -17,7 +17,7 @@ def get_slopes(num_heads: int):
         num_heads (int): number of separate attention heads in the multihead attention layer
     """
 
-    def get_slopes_power_of_2(num_heads: int):
+    def get_slopes_power_of_2(num_heads: int) -> list:
         """calculates scalars when number of heads is a power of 2"""
         start = 2 ** (-(2 ** -(math.log2(num_heads) - 3)))
         ratio = start
@@ -35,7 +35,7 @@ def get_slopes(num_heads: int):
     )
 
 
-def fill_with_neg_inf(tensor: torch.Tensor):
+def fill_with_neg_inf(tensor: torch.Tensor) -> torch.Tensor:
     """FP16-compatible function that fills a tensor with -inf."""
     return tensor.float().fill_(float("-inf")).type_as(tensor)
 
