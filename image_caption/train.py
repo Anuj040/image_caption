@@ -31,12 +31,18 @@ class Caption:
     """object for preparing model definition, train procedure and the essentials"""
 
     def __init__(
-        self, trainable: bool, image_embed_size: int = 300, use_pretrained: bool = True
+        self,
+        trainable: bool,
+        image_embed_size: int = 300,
+        use_pretrained: bool = True,
+        use_alibi: bool = False,
     ) -> None:
         # Dimension for the image embeddings and token embeddings
         self.image_embed_size: int = image_embed_size
         # Whether to use pretrained token embeddings
         self.use_pretrained: bool = use_pretrained
+        # Use positional embeddings or alibi mask
+        self.use_alibi: bool = use_alibi
         # Per-layer units in the feed-forward network
         self.ff_dim: int = 512
         # Heads for multihead attention for encoder network
@@ -146,6 +152,7 @@ class Caption:
             self.image_embed_size,
             self.ff_dim,
             2 * self.num_heads,
+            self.use_alibi,
         ).to(DEVICE)
 
         if self.use_pretrained:
@@ -324,5 +331,5 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False)
-    model.train(epochs=10, batch_size=4)
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=True)
+    model.train(seq_length=25, epochs=10, batch_size=4)
