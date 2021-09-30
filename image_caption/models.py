@@ -196,10 +196,9 @@ class TransformerDecoderBlock(nn.Module):
         inputs = self.embedding(inputs)
         padding_mask = None
         if mask is not None:
-            padding_mask = 1.0 - torch.unsqueeze(mask, -1)
-            padding_mask = torch.tile(padding_mask, [self.num_heads, 1, 1]).to(bool)
+            padding_mask = torch.unsqueeze(mask, -1).float()
             if self.use_alibi:
-                causal_mask = get_alibi_mask(inputs, self.num_heads)
+                causal_mask = get_alibi_mask(inputs, self.num_heads).to(DEVICE)
                 combined_mask = 1.0 - torch.unsqueeze(mask, 1)
                 new_attn_mask = torch.zeros_like(combined_mask, dtype=torch.float)
                 new_attn_mask.masked_fill_(combined_mask.to(bool), float("-inf"))
@@ -214,13 +213,12 @@ class TransformerDecoderBlock(nn.Module):
                 )
         else:
             if self.use_alibi:
-                combined_mask = get_alibi_mask(inputs, self.num_heads)
+                combined_mask = get_alibi_mask(inputs, self.num_heads).to(DEVICE)
             else:
                 combined_mask = 1.0 - self.get_causal_attention_mask(inputs)
                 combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
                     bool
                 )
-
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -229,13 +227,11 @@ class TransformerDecoderBlock(nn.Module):
             attn_mask=combined_mask,
         )
         out_1 = self.layernorm_1(inputs + attention_output_1)
-
         attention_output_2, _ = self.attention_2(
-            query=out_1,
+            query=out_1 * padding_mask,
             key=encoder_outputs,
             value=encoder_outputs,
             need_weights=False,
-            attn_mask=padding_mask,
         )
         out_2 = self.layernorm_2(out_1 + attention_output_2)
 
@@ -248,8 +244,6 @@ class TransformerDecoderBlock(nn.Module):
         ffn_out = self.dropout_2(ffn_out)
         preds = self.out(ffn_out)
         # preds = self.act_2(self.out(ffn_out))
-
-        # return preds
         return preds
 
     @staticmethod
