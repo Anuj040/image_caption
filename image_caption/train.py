@@ -1,8 +1,9 @@
 """model definition, train procedure and the essentials"""
 import datetime
 import os
-from typing import Tuple
+from typing import Optional, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
@@ -18,6 +19,7 @@ from image_caption.models import (
     TransformerDecoderBlock,
     TransformerEncoderBlock,
 )
+from image_caption.utils.data_utils import prepare_embeddings
 from image_caption.utils.generator import CaptionDataset, Collate
 
 # check if cuda available
@@ -29,11 +31,12 @@ class Caption:
     """object for preparing model definition, train procedure and the essentials"""
 
     def __init__(
-        self,
-        trainable: bool,
+        self, trainable: bool, image_embed_size: int = 300, use_pretrained: bool = True
     ) -> None:
         # Dimension for the image embeddings and token embeddings
-        self.image_embed_size: int = 512
+        self.image_embed_size: int = image_embed_size
+        # Whether to use pretrained token embeddings
+        self.use_pretrained: bool = use_pretrained
         # Per-layer units in the feed-forward network
         self.ff_dim: int = 512
         # Heads for multihead attention for encoder network
@@ -45,16 +48,18 @@ class Caption:
 
     def generators(
         self, seq_length: int, batch_size: int, num_workers: int = 8
-    ) -> Tuple[int, DataLoader, DataLoader]:
+    ) -> Tuple[int, DataLoader, DataLoader, Optional[np.ndarray]]:
         """prepares data loader objects for model training and evaluation
 
         Args:
-            seq_length (int): [description]
+            seq_length (int): Fixed length allowed for any sequence.
             batch_size (int): [description]
             num_workers (int, optional): [description]. Defaults to 8.
 
         Returns:
-            Tuple[int, DataLoader, DataLoader]: [description]
+            int: Total size of the vocabulary
+            DataLoader, DataLoader: Train and validation dataset loaders
+            Optional[np.ndarray]: pretrained Embedding matrix
         """
         # Data augmentation for image data
         image_size = (224, 224)
@@ -104,7 +109,13 @@ class Caption:
             pin_memory=True,
             collate_fn=Collate(pad_value),
         )
-        return vocab_size, train_loader, valid_loader
+        if not self.use_pretrained:
+            return vocab_size, train_loader, valid_loader, None
+
+        embedding_matrix = prepare_embeddings(
+            "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
+        )
+        return vocab_size, train_loader, valid_loader, embedding_matrix
 
     def train(
         self,
@@ -118,7 +129,7 @@ class Caption:
         Args:
             seq_length (int, optional): Fixed length allowed for any sequence. Defaults to 25.
         """
-        vocab_size, train_loader, valid_loader = self.generators(
+        vocab_size, train_loader, valid_loader, embedding_matrix = self.generators(
             seq_length, batch_size, num_workers
         )
 
@@ -136,6 +147,12 @@ class Caption:
             self.ff_dim,
             2 * self.num_heads,
         ).to(DEVICE)
+
+        if self.use_pretrained:
+            # Substitute pretrained embeddings for embedding layer
+            self.decoder.embedding.token_embeddings.weight = nn.Parameter(
+                torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
+            )
 
         # Prepare the optimizer & loss functions
         lrate = 3e-4
@@ -182,7 +199,7 @@ class Caption:
 
                 del img_embed, imgs, captions
 
-                if (i + 1) % int(20 * 8 / batch_size) == 0:
+                if (i + 1) % int(50 * 8 / batch_size) == 0:
                     writer.add_scalar("loss", loss, step)
                     writer.add_scalar("acc", acc, step)
             # Evaluation step
@@ -308,4 +325,4 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False)
-    model.train(epochs=10, batch_size=16)
+    model.train(epochs=10, batch_size=4)

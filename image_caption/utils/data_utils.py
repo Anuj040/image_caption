@@ -1,8 +1,10 @@
 """utilities for data processing"""
 import os
+import zipfile
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
 
 np.random.seed(123)
 
@@ -95,3 +97,56 @@ def train_val_split(
 
     # 4. Return the splits
     return training_data, validation_data
+
+
+def data_downloader(path: str) -> None:
+    """Method for downloading the dataset if not available at the directed location
+    Args:
+        path (str): Directed location
+    """
+    os.makedirs(path, exist_ok=True)
+    url = "http://nlp.stanford.edu/data/wordvecs/glove.6B.zip"
+    os.system(f"wget {url} -P {path}")
+
+    glove_path = os.path.join(path, "glove.6B.zip")
+
+    # Extrcting the contents of the downloaded file
+    with zipfile.ZipFile(glove_path, "r") as zip_ref:
+        zip_ref.extractall(path)
+
+    # Cleaning # Remove .zip file
+    os.remove(glove_path)
+
+
+def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarray:
+    """prepares pretrained token embeddings matrix
+
+    Args:
+        path (str): path to the embeddings file
+        vocab (dict): vocabulary object
+        embed_dim (int, optional): embedding dimensions for each word. Defaults to 100.
+
+    Returns:
+        np.ndarray: embedding matrix with row number corresponing to word index in vocab
+    """
+    glove_path = os.path.join(path, f"glove.6B.{embed_dim}d.txt")
+    # Check if the specified embeddings available
+    if not os.path.exists(glove_path):
+        data_downloader(path)
+
+    glove = pd.read_csv(glove_path, sep=" ", quoting=3, header=None, index_col=0)
+    glove_embedding = {key: val.values for key, val in glove.T.items()}
+
+    # Get the statistics of existing embeds
+    embedding_vals = np.vstack(list(glove_embedding.values()))
+    std = np.std(embedding_vals)
+    embed_mu = np.mean(embedding_vals)
+
+    # Initialize randomly to have random embeds for unavailbale tokens
+    embedding_matrix = embed_mu + std * np.random.randn(len(vocab) + 1, embed_dim)
+
+    for word, index in vocab.stoi.items():
+        if word in glove_embedding:
+            embedding_matrix[index] = glove_embedding[word]
+
+    return embedding_matrix

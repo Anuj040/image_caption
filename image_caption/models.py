@@ -60,9 +60,6 @@ class TransformerEncoderBlock(nn.Module):
             input_embed_size (int, optional): embedding size for input sequences Defaults to 1280.
         """
         super().__init__(**kwargs)
-        self.output_embed_size = output_embed_size
-        self.num_heads = num_heads
-
         self.attention_1 = nn.MultiheadAttention(
             output_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )
@@ -101,9 +98,10 @@ class PositionalEmbedding(nn.Module):
             embed_dim (int): embedding dimensions
         """
         super().__init__(**kwargs)
-        #! try pretrained embeddings
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
         #! Try train short, test long: https://arxiv.org/abs/2108.12409
+        #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
+        #! course_UvA-DL/05-transformers-and-MH-attention.html
         self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
         self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)
