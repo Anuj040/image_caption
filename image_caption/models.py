@@ -7,6 +7,7 @@ import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
+from image_caption.utils.activation import CustomMultiheadAttention
 from image_caption.utils.model_utils import get_alibi_mask
 
 # check if cuda available
@@ -174,8 +175,13 @@ class TransformerDecoderBlock(nn.Module):
         )
         self.layernorm_1 = nn.LayerNorm(embed_dim)
 
-        self.attention_2 = nn.MultiheadAttention(
-            embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
+        self.attention_2 = CustomMultiheadAttention(
+            embed_dim,
+            num_heads,
+            dropout_p=0.1,
+            bias=True,
+            batch_first=True,
+            softmax_dim=-1,
         )
         self.layernorm_2 = nn.LayerNorm(embed_dim)
 
@@ -196,7 +202,8 @@ class TransformerDecoderBlock(nn.Module):
         inputs = self.embedding(inputs)
         padding_mask = None
         if mask is not None:
-            padding_mask = torch.unsqueeze(mask, -1).float()
+            padding_mask = 1.0 - torch.unsqueeze(mask, -1)
+            padding_mask = torch.tile(padding_mask, [self.num_heads, 1, 1]).to(bool)
             if self.use_alibi:
                 causal_mask = get_alibi_mask(inputs, self.num_heads).to(DEVICE)
                 combined_mask = 1.0 - torch.unsqueeze(mask, 1)
@@ -228,10 +235,11 @@ class TransformerDecoderBlock(nn.Module):
         )
         out_1 = self.layernorm_1(inputs + attention_output_1)
         attention_output_2, _ = self.attention_2(
-            query=out_1 * padding_mask,
+            query=out_1,
             key=encoder_outputs,
             value=encoder_outputs,
             need_weights=False,
+            attn_mask=padding_mask,
         )
         out_2 = self.layernorm_2(out_1 + attention_output_2)
 
