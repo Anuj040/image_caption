@@ -562,7 +562,6 @@ def multi_head_attention_forward(
         new_attn_mask = torch.zeros_like(attn_mask, dtype=torch.float)
         new_attn_mask.masked_fill_(attn_mask, float("-inf"))
         attn_mask = new_attn_mask
-        print("attn", attn_mask.transpose(-2, -1))
 
     # adjust dropout probability
     if not training:

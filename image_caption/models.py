@@ -181,7 +181,7 @@ class TransformerDecoderBlock(nn.Module):
             dropout_p=0.1,
             bias=True,
             batch_first=True,
-            softmax_dim=-1,
+            softmax_dim=1,
         )
         self.layernorm_2 = nn.LayerNorm(embed_dim)
 
