@@ -67,7 +67,7 @@ class TransformerEncoderBlock(nn.Module):
             input_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )
         self.layernorm_1 = nn.LayerNorm(input_embed_size)
-        self.layernorm_2 = nn.LayerNorm(output_embed_size)
+        self.layernorm_2 = nn.LayerNorm(input_embed_size)
         self.dense_1 = nn.Linear(input_embed_size, output_embed_size, bias=True)
         self.act_1 = nn.ReLU()
 
