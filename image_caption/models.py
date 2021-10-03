@@ -64,7 +64,7 @@ class TransformerEncoderBlock(nn.Module):
         """
         super().__init__(**kwargs)
         self.attention_1 = nn.MultiheadAttention(
-            output_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
+            input_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )
         self.layernorm_1 = nn.LayerNorm(input_embed_size)
         self.layernorm_2 = nn.LayerNorm(output_embed_size)
@@ -74,7 +74,6 @@ class TransformerEncoderBlock(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """feature encoder's forward pass"""
         inputs = self.layernorm_1(inputs)
-        inputs = self.act_1(self.dense_1(inputs))
 
         attention_output_1, _ = self.attention_1(
             query=inputs,
@@ -84,7 +83,8 @@ class TransformerEncoderBlock(nn.Module):
             attn_mask=None,
         )
         out_1 = self.layernorm_2(inputs + attention_output_1)
-        return out_1
+        out_2 = self.act_1(self.dense_1(out_1))
+        return out_2
 
 
 class PositionalEmbedding(nn.Module):
