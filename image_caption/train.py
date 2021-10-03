@@ -151,7 +151,7 @@ class Caption:
             seq_length,
             self.image_embed_size,
             self.ff_dim,
-            2 * self.num_heads,
+            3 * self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
 
@@ -331,5 +331,5 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=True)
-    model.train(seq_length=25, epochs=10, batch_size=4)
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
+    model.train(seq_length=25, epochs=10, batch_size=2)
