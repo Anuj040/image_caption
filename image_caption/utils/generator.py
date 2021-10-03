@@ -23,18 +23,17 @@ random.seed(111)
 class Vocabulary:
     """Vocabulary building object"""
 
-    def __init__(self, freq_threshold: int, standardize: Callable):
+    def __init__(self, standardize: Callable):
         """Initializer
 
         Args:
-            freq_threshold (int): Neglect words with occurence less than the threshold
+            standardize (Callable): utility function for standardizing the text inputs
         """
+
         self.standardize = standardize
 
         self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
         self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
-
-        self.freq_threshold = freq_threshold
 
     def __len__(self):
         return len(self.itos)
@@ -57,13 +56,11 @@ class Vocabulary:
             for word in self.tokenizer_eng(sentence):
                 if word not in frequency:
                     frequency[word] = 1
-                else:
-                    frequency[word] += 1
-
-                if frequency[word] > self.freq_threshold - 1:
                     self.itos[idx] = word
                     self.stoi[word] = idx
                     idx += 1
+                else:
+                    frequency[word] += 1
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
@@ -90,7 +87,6 @@ class CaptionDataset(Dataset):
         self,
         root_dir: str = "datasets",
         caption_file: str = "Flickr8k.token.txt",
-        freq_threshold: int = 5,
         transform=None,
         seq_length: int = 25,
         split: str = "train",
@@ -101,12 +97,10 @@ class CaptionDataset(Dataset):
             root_dir (str, optional): Defaults to "datasets".
             caption_file (str, optional): name of the captions file.
                     Defaults to "Flickr8k.token.txt".
-            freq_threshold (int, optional): Neglect words with occurence less than the threshold
             transform ([type], optional): Image transformations Defaults to None.
             seq_length (int, optional): max caption length for the dataset prep. Defaults to 25.
             split (str): data split to return
         """
-        self.freq_threshold = freq_threshold
         self.transform = transform
         self.root_dir = root_dir
 
@@ -127,7 +121,7 @@ class CaptionDataset(Dataset):
         strip_chars = strip_chars.replace("<", "")
         self.strip_chars = strip_chars.replace(">", "")
 
-        self.vocab = Vocabulary(freq_threshold, self.custom_standardization)
+        self.vocab = Vocabulary(self.custom_standardization)
         self.vocab.build_vocabulary(text_data)
 
         # # Fixed length allowed for any sequence
