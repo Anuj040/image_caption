@@ -1,7 +1,7 @@
 """model definition, train procedure and the essentials"""
 import datetime
 import os
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -37,6 +37,8 @@ class Caption:
         use_pretrained: bool = True,
         use_alibi: bool = False,
     ) -> None:
+        # number of captions for each image
+        self.num_captions: int = 5
         # Dimension for the image embeddings and token embeddings
         self.image_embed_size: int = image_embed_size
         # Whether to use pretrained token embeddings
@@ -102,7 +104,7 @@ class Caption:
             num_workers=num_workers,
             shuffle=True,
             pin_memory=True,
-            collate_fn=Collate(pad_value),
+            collate_fn=Collate(pad_value, self.num_captions),
         )
         valid_dataset = CaptionDataset(
             seq_length=seq_length, transform=valid_transform, split="valid"
@@ -113,7 +115,7 @@ class Caption:
             num_workers=num_workers,
             shuffle=False,
             pin_memory=True,
-            collate_fn=Collate(pad_value),
+            collate_fn=Collate(pad_value, self.num_captions),
         )
         if not self.use_pretrained:
             return vocab_size, train_loader, valid_loader, None
@@ -192,7 +194,6 @@ class Caption:
                 optimizer.step()
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
-                captions = captions.to(DEVICE)
 
                 with autocast(enabled=torch.cuda.is_available()):
                     img_embed = cnn_model(imgs)
@@ -259,7 +260,7 @@ class Caption:
         return torch.sum(accuracy) / torch.sum(mask.to(float))
 
     def _compute_caption_loss_and_acc(
-        self, img_embed: torch.Tensor, batch_seq: torch.Tensor
+        self, img_embed: torch.Tensor, captions: List[torch.Tensor]
     ) -> Tuple[torch.Tensor]:
         """
             1. uses image embeddings to predict the caption
@@ -268,30 +269,38 @@ class Caption:
 
         Args:
             img_embed (torch.Tensor): image embeddings from feature extractor netowrk
-            batch_seq (torch.Tensor): ground truth sequence (captions)
+            captions (List[torch.Tensor]): multiple ground truth sequences (captions) for
+                        each image
 
         Returns:
             Tuple[torch.Tensor]: loss/acc values
         """
 
         encoder_out = self.encoder(img_embed)
-        batch_seq_inp = batch_seq[:, :-1]
-        batch_seq_true = batch_seq[:, 1:].long()
+        loss = 0.0
+        acc = 0.0
+        for batch_seq in captions:
+            batch_seq: torch.Tensor = batch_seq.to(DEVICE)
+            batch_seq_inp = batch_seq[:, :-1]
+            batch_seq_true = batch_seq[:, 1:].long()
 
-        # Ignore tokens <UNK>, <PAD>, etc.
-        mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
-        for token_index in self.ignore_indices[1:]:
-            temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
-            mask = torch.minimum(mask, temp_mask)
+            # Ignore tokens <UNK>, <PAD>, etc.
+            mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
+            for token_index in self.ignore_indices[1:]:
+                temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
+                mask = torch.minimum(mask, temp_mask)
 
-        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
-        batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
-        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
-        acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
-        del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
-        del mask, batch_seq_pred
+            batch_seq_pred = self.decoder(
+                batch_seq_inp, encoder_out, mask=mask.to(DEVICE)
+            )
+            batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
+            loss += self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
+            acc += self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
 
-        return loss, acc
+            del batch_seq, batch_seq_inp, batch_seq_true
+            del mask, batch_seq_pred
+        del encoder_out
+        return loss / self.num_captions, acc / self.num_captions
 
     def valid(
         self, cnn_model: nn.Module, loader: DataLoader, writer: SummaryWriter, step: int
@@ -315,9 +324,8 @@ class Caption:
         for (imgs, captions) in loader:
             batch_size = imgs.size(0)
             imgs = imgs.to(DEVICE)
-            captions = captions.to(DEVICE)
-            img_embed = cnn_model(imgs)
 
+            img_embed = cnn_model(imgs)
             loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
             del img_embed, imgs, captions
 
@@ -332,4 +340,4 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    model.train(seq_length=25, epochs=10, batch_size=2)
+    model.train(seq_length=25, epochs=10, batch_size=4)
