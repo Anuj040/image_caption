@@ -328,10 +328,12 @@ class Caption:
             batch_loss = 0.0
             batch_acc = 0.0
             for caption in captions:
-                loss, acc = self._compute_caption_loss_and_acc(img_embed, caption)
+                loss, acc = self._compute_caption_loss_and_acc(
+                    img_embed, caption.to(DEVICE)
+                )
                 batch_loss += loss
                 batch_acc += acc
-                del img_embed, imgs, captions
+            del img_embed, imgs, captions
 
         loss_total += batch_loss.cpu().item() * batch_size
         acc_mean += batch_acc.cpu().item() * batch_size
