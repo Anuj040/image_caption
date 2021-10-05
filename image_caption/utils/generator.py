@@ -3,7 +3,6 @@ data generator module
 https://www.kaggle.com/fanbyprinciple/pytorch-image-captioning-with-flickr/notebook
 """
 import os
-import random
 import re
 from typing import Callable, List, Tuple
 
@@ -16,8 +15,6 @@ from torch.utils.data import Dataset
 SPACY_ENG = spacy.load("en_core_web_sm")
 # pylint: disable = wrong-import-position
 from image_caption.utils.data_utils import load_captions_data, train_val_split
-
-random.seed(111)
 
 
 class Vocabulary:
@@ -73,10 +70,14 @@ class Vocabulary:
         """
         tokenized_text = self.tokenizer_eng(sentence)
 
-        return [
-            self.stoi[word] if word in self.stoi else self.stoi["<UNK>"]
-            for word in tokenized_text
-        ]
+        return (
+            [self.stoi["<SOS>"]]
+            + [
+                self.stoi[word] if word in self.stoi else self.stoi["<UNK>"]
+                for word in tokenized_text
+            ]
+            + [self.stoi["<EOS>"]]
+        )
 
 
 # pylint: disable = too-many-arguments
@@ -132,20 +133,17 @@ class CaptionDataset(Dataset):
 
     def __getitem__(self, index):
         image = self.images[index]
-
-        #! TODO: check if the model can work with all captions
-        caption = random.choice(self.captions[image])
-
         img = Image.open(image).convert("RGB")
 
         if self.transform:
             img = self.transform(img)
 
-        numericalized_caption = [self.vocab.stoi["<SOS>"]]
-        numericalized_caption += self.vocab.numericalize(caption)
-        numericalized_caption.append(self.vocab.stoi["<EOS>"])
+        numericalized_captions = [
+            torch.Tensor(self.vocab.numericalize(caption)).to(dtype=torch.int32)
+            for caption in self.captions[image]
+        ]
 
-        return img, torch.Tensor(numericalized_caption).to(dtype=torch.int32)
+        return img, numericalized_captions
 
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
@@ -155,21 +153,30 @@ class CaptionDataset(Dataset):
 class Collate:
     """process the list of samples to form a batch"""
 
-    def __init__(self, pad_value: int):
+    def __init__(self, pad_value: int, num_captions: int = 5):
         """intialize
 
         Args:
             pad_value (int): value to pad the sequence with
+            num_captions (int): number of captions for each image
         """
         self.pad_value = pad_value
+        self.num_captions = num_captions
 
     def __call__(self, batch: list) -> Tuple[torch.Tensor]:
         """returns the batch from input lists"""
         imgs = [item[0].unsqueeze(0) for item in batch]
         img = torch.cat(imgs, dim=0)
-        targets = [item[1] for item in batch]
-        targets = pad_sequence(targets, batch_first=True, padding_value=self.pad_value)
-        return img, targets
+
+        captions_tensor = []
+        for i in range(self.num_captions):
+            targets = [item[1][i] for item in batch]
+            targets = pad_sequence(
+                targets, batch_first=True, padding_value=self.pad_value
+            )
+            captions_tensor.append(targets)
+
+        return img, captions_tensor
 
 
 if __name__ == "__main__":  # pragma: no cover
