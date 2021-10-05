@@ -172,7 +172,16 @@ class Caption:
             ]
         )
         scheduler = OneCycleLR(
-            optimizer, max_lr=lrate, steps_per_epoch=len(train_loader), epochs=epochs
+            optimizer,
+            max_lr=lrate,
+            steps_per_epoch=self.num_captions * len(train_loader),
+            epochs=epochs,
+        )
+        swa_scheduler = torch.optim.swa_utils.SWALR(
+            optimizer,
+            anneal_strategy="cos",
+            anneal_epochs=int(0.2 * epochs),
+            swa_lr=lrate,
         )
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
@@ -208,7 +217,7 @@ class Caption:
                     scaler.update()
 
                     optimizer.zero_grad()
-                    scheduler.step()
+                    swa_scheduler.step()
                     batch_loss += loss
                     batch_acc += acc
 
@@ -339,8 +348,10 @@ class Caption:
         acc_mean += batch_acc.cpu().item() * batch_size
         loss_count += batch_size
 
-        writer.add_scalar("valid_loss", loss_total / loss_count, step)
-        writer.add_scalar("valid_acc", acc_mean / loss_count, step)
+        writer.add_scalar(
+            "valid_loss", loss_total / loss_count / self.num_captions, step
+        )
+        writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
         return loss_total / loss_count
 
 
