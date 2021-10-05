@@ -1,7 +1,7 @@
 """model definition, train procedure and the essentials"""
 import datetime
 import os
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -191,25 +191,32 @@ class Caption:
             self.encoder.train()
             self.decoder.train()
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
-                optimizer.step()
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
+                img_embed = cnn_model(imgs)
 
-                with autocast(enabled=torch.cuda.is_available()):
-                    img_embed = cnn_model(imgs)
-                    loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                batch_loss = 0.0
+                batch_acc = 0.0
+                for caption in captions:
+                    optimizer.step()
+                    with autocast(enabled=torch.cuda.is_available()):
+                        loss, acc = self._compute_caption_loss_and_acc(
+                            img_embed, caption.to(DEVICE)
+                        )
+                    scaler.scale(loss).backward(retain_graph=True)
+                    scaler.step(optimizer)
+                    scaler.update()
 
-                optimizer.zero_grad()
-                scheduler.step()
+                    optimizer.zero_grad()
+                    scheduler.step()
+                    batch_loss += loss
+                    batch_acc += acc
 
                 del img_embed, imgs, captions
 
                 if (i + 1) % int(50 * 8 / batch_size) == 0:
-                    writer.add_scalar("loss", loss, step)
-                    writer.add_scalar("acc", acc, step)
+                    writer.add_scalar("loss", batch_loss / self.num_captions, step)
+                    writer.add_scalar("acc", batch_acc / self.num_captions, step)
             # Evaluation step
             current_val_loss = self.valid(cnn_model, valid_loader, writer, step)
 
@@ -260,7 +267,7 @@ class Caption:
         return torch.sum(accuracy) / torch.sum(mask.to(float))
 
     def _compute_caption_loss_and_acc(
-        self, img_embed: torch.Tensor, captions: List[torch.Tensor]
+        self, img_embed: torch.Tensor, batch_seq: torch.Tensor
     ) -> Tuple[torch.Tensor]:
         """
             1. uses image embeddings to predict the caption
@@ -269,38 +276,30 @@ class Caption:
 
         Args:
             img_embed (torch.Tensor): image embeddings from feature extractor netowrk
-            captions (List[torch.Tensor]): multiple ground truth sequences (captions) for
-                        each image
+            batch_seq (torch.Tensor): ground truth sequence (captions)
 
         Returns:
             Tuple[torch.Tensor]: loss/acc values
         """
 
         encoder_out = self.encoder(img_embed)
-        loss = 0.0
-        acc = 0.0
-        for batch_seq in captions:
-            batch_seq: torch.Tensor = batch_seq.to(DEVICE)
-            batch_seq_inp = batch_seq[:, :-1]
-            batch_seq_true = batch_seq[:, 1:].long()
+        batch_seq_inp = batch_seq[:, :-1]
+        batch_seq_true = batch_seq[:, 1:].long()
 
-            # Ignore tokens <UNK>, <PAD>, etc.
-            mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
-            for token_index in self.ignore_indices[1:]:
-                temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
-                mask = torch.minimum(mask, temp_mask)
+        # Ignore tokens <UNK>, <PAD>, etc.
+        mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
+        for token_index in self.ignore_indices[1:]:
+            temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
+            mask = torch.minimum(mask, temp_mask)
 
-            batch_seq_pred = self.decoder(
-                batch_seq_inp, encoder_out, mask=mask.to(DEVICE)
-            )
-            batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
-            loss += self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
-            acc += self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
+        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
+        batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
+        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
+        acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
 
-            del batch_seq, batch_seq_inp, batch_seq_true
-            del mask, batch_seq_pred
-        del encoder_out
-        return loss / self.num_captions, acc / self.num_captions
+        del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
+        del mask, batch_seq_pred
+        return loss, acc
 
     def valid(
         self, cnn_model: nn.Module, loader: DataLoader, writer: SummaryWriter, step: int
@@ -326,11 +325,16 @@ class Caption:
             imgs = imgs.to(DEVICE)
 
             img_embed = cnn_model(imgs)
-            loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
-            del img_embed, imgs, captions
+            batch_loss = 0.0
+            batch_acc = 0.0
+            for caption in captions:
+                loss, acc = self._compute_caption_loss_and_acc(img_embed, caption)
+                batch_loss += loss
+                batch_acc += acc
+                del img_embed, imgs, captions
 
-        loss_total += loss.cpu().item() * batch_size
-        acc_mean += acc.cpu().item() * batch_size
+        loss_total += batch_loss.cpu().item() * batch_size
+        acc_mean += batch_acc.cpu().item() * batch_size
         loss_count += batch_size
 
         writer.add_scalar("valid_loss", loss_total / loss_count, step)
