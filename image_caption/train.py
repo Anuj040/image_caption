@@ -8,7 +8,6 @@ import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
-from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import transforms
@@ -37,6 +36,8 @@ class Caption:
         use_pretrained: bool = True,
         use_alibi: bool = False,
     ) -> None:
+        # number of captions for each image
+        self.num_captions: int = 5
         # Dimension for the image embeddings and token embeddings
         self.image_embed_size: int = image_embed_size
         # Whether to use pretrained token embeddings
@@ -102,7 +103,7 @@ class Caption:
             num_workers=num_workers,
             shuffle=True,
             pin_memory=True,
-            collate_fn=Collate(pad_value),
+            collate_fn=Collate(pad_value, self.num_captions),
         )
         valid_dataset = CaptionDataset(
             seq_length=seq_length, transform=valid_transform, split="valid"
@@ -113,7 +114,7 @@ class Caption:
             num_workers=num_workers,
             shuffle=False,
             pin_memory=True,
-            collate_fn=Collate(pad_value),
+            collate_fn=Collate(pad_value, self.num_captions),
         )
         if not self.use_pretrained:
             return vocab_size, train_loader, valid_loader, None
@@ -151,7 +152,7 @@ class Caption:
             seq_length,
             self.image_embed_size,
             self.ff_dim,
-            2 * self.num_heads,
+            3 * self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
 
@@ -169,8 +170,11 @@ class Caption:
                 {"params": self.decoder.parameters(), "lr": lrate},
             ]
         )
-        scheduler = OneCycleLR(
-            optimizer, max_lr=lrate, steps_per_epoch=len(train_loader), epochs=epochs
+        swa_scheduler = torch.optim.swa_utils.SWALR(
+            optimizer,
+            anneal_strategy="cos",
+            anneal_epochs=int(0.2 * epochs),
+            swa_lr=lrate,
         )
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
@@ -189,26 +193,32 @@ class Caption:
             self.encoder.train()
             self.decoder.train()
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
-                optimizer.step()
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
-                captions = captions.to(DEVICE)
+                img_embed = cnn_model(imgs)
 
-                with autocast(enabled=torch.cuda.is_available()):
-                    img_embed = cnn_model(imgs)
-                    loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                batch_loss = 0.0
+                batch_acc = 0.0
+                for caption in captions:
+                    optimizer.step()
+                    with autocast(enabled=torch.cuda.is_available()):
+                        loss, acc = self._compute_caption_loss_and_acc(
+                            img_embed, caption.to(DEVICE)
+                        )
+                    scaler.scale(loss).backward(retain_graph=True)
+                    scaler.step(optimizer)
+                    scaler.update()
 
-                optimizer.zero_grad()
-                scheduler.step()
+                    optimizer.zero_grad()
+                    swa_scheduler.step()
+                    batch_loss += loss
+                    batch_acc += acc
 
                 del img_embed, imgs, captions
 
                 if (i + 1) % int(50 * 8 / batch_size) == 0:
-                    writer.add_scalar("loss", loss, step)
-                    writer.add_scalar("acc", acc, step)
+                    writer.add_scalar("loss", batch_loss / self.num_captions, step)
+                    writer.add_scalar("acc", batch_acc / self.num_captions, step)
             # Evaluation step
             current_val_loss = self.valid(cnn_model, valid_loader, writer, step)
 
@@ -288,9 +298,9 @@ class Caption:
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
+
         del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
         del mask, batch_seq_pred
-
         return loss, acc
 
     def valid(
@@ -315,21 +325,29 @@ class Caption:
         for (imgs, captions) in loader:
             batch_size = imgs.size(0)
             imgs = imgs.to(DEVICE)
-            captions = captions.to(DEVICE)
-            img_embed = cnn_model(imgs)
 
-            loss, acc = self._compute_caption_loss_and_acc(img_embed, captions)
+            img_embed = cnn_model(imgs)
+            batch_loss = 0.0
+            batch_acc = 0.0
+            for caption in captions:
+                loss, acc = self._compute_caption_loss_and_acc(
+                    img_embed, caption.to(DEVICE)
+                )
+                batch_loss += loss
+                batch_acc += acc
             del img_embed, imgs, captions
 
-        loss_total += loss.cpu().item() * batch_size
-        acc_mean += acc.cpu().item() * batch_size
+        loss_total += batch_loss.cpu().item() * batch_size
+        acc_mean += batch_acc.cpu().item() * batch_size
         loss_count += batch_size
 
-        writer.add_scalar("valid_loss", loss_total / loss_count, step)
-        writer.add_scalar("valid_acc", acc_mean / loss_count, step)
+        writer.add_scalar(
+            "valid_loss", loss_total / loss_count / self.num_captions, step
+        )
+        writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
         return loss_total / loss_count
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=True)
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
     model.train(seq_length=25, epochs=10, batch_size=4)

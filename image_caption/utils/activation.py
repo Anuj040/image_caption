@@ -1,76 +1,122 @@
 # pylint: disable-all"
 import math
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from torch import _VF, nn
-from torch._C import _has_torch_function, _has_torch_function_unary
 from torch.nn.init import constant_, xavier_normal_, xavier_uniform_
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 
-has_torch_function = _has_torch_function
-has_torch_function_unary = _has_torch_function_unary
 
+# Activation functions
+def softmax(
+    input: torch.Tensor,
+    dim: Optional[int] = None,
+    _stacklevel: int = 3,
+    dtype: Optional[int] = None,
+) -> torch.Tensor:
+    r"""Applies a softmax function.
 
-def handle_torch_function(
-    public_api: Callable, relevant_args: Iterable[Any], *args, **kwargs
-) -> Any:
-    """Implement a function with checks for ``__torch_function__`` overrides.
+    Softmax is defined as:
 
-    See torch::autograd::handle_torch_function for the equivalent of this
-    function in the C++ implementation.
+    :math:`\text{Softmax}(x_{i}) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}`
 
-    Arguments
-    ---------
-    public_api : function
-        Function exposed by the public torch API originally called like
-        ``public_api(*args, **kwargs)`` on which arguments are now being
-        checked.
-    relevant_args : iterable
-        Iterable of arguments to check for __torch_function__ methods.
-    args : tuple
-        Arbitrary positional arguments originally passed into ``public_api``.
-    kwargs : tuple
-        Arbitrary keyword arguments originally passed into ``public_api``.
+    It is applied to all slices along dim, and will re-scale them so that the elements
+    lie in the range `[0, 1]` and sum to 1.
 
-    Returns
-    -------
-    object
-        Result from calling ``implementation`` or an ``__torch_function__``
-        method, as appropriate.
+    See :class:`~torch.nn.Softmax` for more details.
 
-    Raises
-    ------
-    TypeError : if no implementation is found.
+    Args:
+        input (Tensor): input
+        dim (int): A dimension along which softmax will be computed.
+        dtype (:class:`torch.dtype`, optional): the desired data type of returned tensor.
+          If specified, the input tensor is casted to :attr:`dtype` before the operation
+          is performed. This is useful for preventing data type overflows. Default: None.
 
-    Example
-    -------
-    >>> def func(a):
-    ...     if type(a) is not torch.Tensor:  # This will make func dispatchable by __torch_function__
-    ...         return handle_torch_function(func, (a,), a)
-    ...     return a + 0
+    .. note::
+        This function doesn't work directly with NLLLoss,
+        which expects the Log to be computed between the Softmax and itself.
+        Use log_softmax instead (it's faster and has better numerical properties).
+
     """
-    # Check for __torch_function__ methods.
-    overloaded_args = _get_overloaded_args(relevant_args)
-    # overloaded_args already have unique types.
-    types = tuple(map(type, overloaded_args))
+    if dim is None:
+        dim = _get_softmax_dim("softmax", input.dim(), _stacklevel)
+    if dtype is None:
+        ret = input.softmax(dim)
+    else:
+        ret = input.softmax(dim, dtype=dtype)
+    return ret
 
-    # Call overrides
-    for overloaded_arg in overloaded_args:
-        # Use `public_api` instead of `implementation` so __torch_function__
-        # implementations can do equality/identity comparisons.
-        result = overloaded_arg.__torch_function__(public_api, types, args, kwargs)
 
-        if result is not NotImplemented:
-            return result
+def dropout(
+    input: torch.Tensor, p: float = 0.5, training: bool = True, inplace: bool = False
+) -> torch.Tensor:
+    r"""
+    During training, randomly zeroes some of the elements of the input
+    tensor with probability :attr:`p` using samples from a Bernoulli
+    distribution.
 
-    func_name = "{}.{}".format(public_api.__module__, public_api.__name__)
-    raise TypeError(
-        "no implementation found for '{}' on types that implement "
-        "__torch_function__: {}".format(
-            func_name, [type(arg) for arg in overloaded_args]
+    See :class:`~torch.nn.Dropout` for details.
+
+    Args:
+        p: probability of an element to be zeroed. Default: 0.5
+        training: apply dropout if is ``True``. Default: ``True``
+        inplace: If set to ``True``, will do this operation in-place. Default: ``False``
+    """
+    if p < 0.0 or p > 1.0:
+        raise ValueError(
+            "dropout probability has to be between 0 and 1, " "but got {}".format(p)
         )
+    return (
+        _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
     )
+
+
+def _scaled_dot_product_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    attn_mask: Optional[torch.Tensor] = None,
+    dropout_p: float = 0.0,
+    softmax_dim: int = -1,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""
+    Computes scaled dot product attention on query, key and value tensors, using
+    an optional attention mask if passed, and applying dropout if a probability
+    greater than 0.0 is specified.
+    Returns a tensor pair containing attended values and attention weights.
+
+    Args:
+        q, k, v: query, key and value tensors. See Shape section for shape details.
+        attn_mask: optional tensor containing mask values to be added to calculated
+            attention. May be 2D or 3D; see Shape section for details.
+        dropout_p: dropout probability. If greater than 0.0, dropout is applied.
+
+    Shape:
+        - q: :math:`(B, Nt, E)` where B is batch size, Nt is the target sequence length,
+            and E is embedding dimension.
+        - key: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
+            and E is embedding dimension.
+        - value: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
+            and E is embedding dimension.
+        - attn_mask: either a 3D tensor of shape :math:`(B, Nt, Ns)` or a 2D tensor of
+            shape :math:`(Nt, Ns)`.
+
+        - Output: attention values have shape :math:`(B, Nt, E)`; attention weights
+            have shape :math:`(B, Nt, Ns)`
+    """
+    _, _, E = q.shape
+    q = q / math.sqrt(E)
+    # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
+    attn = torch.bmm(q, k.transpose(-2, -1))
+    if attn_mask is not None:
+        attn += attn_mask
+    attn = softmax(attn, dim=softmax_dim)
+    if dropout_p > 0.0:
+        attn = dropout(attn, p=dropout_p)
+    # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
+    output = torch.bmm(attn, v)
+    return output, attn
 
 
 def linear(
@@ -146,125 +192,6 @@ def _in_projection_packed(
         else:
             b_q, b_k, b_v = b.chunk(3)
         return linear(q, w_q, b_q), linear(k, w_k, b_k), linear(v, w_v, b_v)
-
-
-def softmax(
-    input: torch.Tensor,
-    dim: Optional[int] = None,
-    _stacklevel: int = 3,
-    dtype: Optional[int] = None,
-) -> torch.Tensor:
-    r"""Applies a softmax function.
-
-    Softmax is defined as:
-
-    :math:`\text{Softmax}(x_{i}) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}`
-
-    It is applied to all slices along dim, and will re-scale them so that the elements
-    lie in the range `[0, 1]` and sum to 1.
-
-    See :class:`~torch.nn.Softmax` for more details.
-
-    Args:
-        input (Tensor): input
-        dim (int): A dimension along which softmax will be computed.
-        dtype (:class:`torch.dtype`, optional): the desired data type of returned tensor.
-          If specified, the input tensor is casted to :attr:`dtype` before the operation
-          is performed. This is useful for preventing data type overflows. Default: None.
-
-    .. note::
-        This function doesn't work directly with NLLLoss,
-        which expects the Log to be computed between the Softmax and itself.
-        Use log_softmax instead (it's faster and has better numerical properties).
-
-    """
-    if has_torch_function_unary(input):
-        return handle_torch_function(
-            softmax, (input,), input, dim=dim, _stacklevel=_stacklevel, dtype=dtype
-        )
-    if dim is None:
-        dim = _get_softmax_dim("softmax", input.dim(), _stacklevel)
-    if dtype is None:
-        ret = input.softmax(dim)
-    else:
-        ret = input.softmax(dim, dtype=dtype)
-    return ret
-
-
-# Activation functions
-def dropout(
-    input: torch.Tensor, p: float = 0.5, training: bool = True, inplace: bool = False
-) -> torch.Tensor:
-    r"""
-    During training, randomly zeroes some of the elements of the input
-    tensor with probability :attr:`p` using samples from a Bernoulli
-    distribution.
-
-    See :class:`~torch.nn.Dropout` for details.
-
-    Args:
-        p: probability of an element to be zeroed. Default: 0.5
-        training: apply dropout if is ``True``. Default: ``True``
-        inplace: If set to ``True``, will do this operation in-place. Default: ``False``
-    """
-    if has_torch_function_unary(input):
-        return handle_torch_function(
-            dropout, (input,), input, p=p, training=training, inplace=inplace
-        )
-    if p < 0.0 or p > 1.0:
-        raise ValueError(
-            "dropout probability has to be between 0 and 1, " "but got {}".format(p)
-        )
-    return (
-        _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
-    )
-
-
-def _scaled_dot_product_attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    attn_mask: Optional[torch.Tensor] = None,
-    dropout_p: float = 0.0,
-    softmax_dim: int = -1,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    r"""
-    Computes scaled dot product attention on query, key and value tensors, using
-    an optional attention mask if passed, and applying dropout if a probability
-    greater than 0.0 is specified.
-    Returns a tensor pair containing attended values and attention weights.
-
-    Args:
-        q, k, v: query, key and value tensors. See Shape section for shape details.
-        attn_mask: optional tensor containing mask values to be added to calculated
-            attention. May be 2D or 3D; see Shape section for details.
-        dropout_p: dropout probability. If greater than 0.0, dropout is applied.
-
-    Shape:
-        - q: :math:`(B, Nt, E)` where B is batch size, Nt is the target sequence length,
-            and E is embedding dimension.
-        - key: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
-            and E is embedding dimension.
-        - value: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
-            and E is embedding dimension.
-        - attn_mask: either a 3D tensor of shape :math:`(B, Nt, Ns)` or a 2D tensor of
-            shape :math:`(Nt, Ns)`.
-
-        - Output: attention values have shape :math:`(B, Nt, E)`; attention weights
-            have shape :math:`(B, Nt, Ns)`
-    """
-    B, Nt, E = q.shape
-    q = q / math.sqrt(E)
-    # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
-    attn = torch.bmm(q, k.transpose(-2, -1))
-    if attn_mask is not None:
-        attn += attn_mask
-    attn = softmax(attn, dim=softmax_dim)
-    if dropout_p > 0.0:
-        attn = dropout(attn, p=dropout_p)
-    # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
-    output = torch.bmm(attn, v)
-    return output, attn
 
 
 def multi_head_attention_forward(
@@ -349,46 +276,6 @@ def multi_head_attention_forward(
         - attn_output_weights: :math:`(N, L, S)` where N is the batch size,
           L is the target sequence length, S is the source sequence length.
     """
-    tens_ops = (
-        query,
-        key,
-        value,
-        in_proj_weight,
-        in_proj_bias,
-        bias_k,
-        bias_v,
-        out_proj_weight,
-        out_proj_bias,
-    )
-    if has_torch_function(tens_ops):
-        return handle_torch_function(
-            multi_head_attention_forward,
-            tens_ops,
-            query,
-            key,
-            value,
-            embed_dim_to_check,
-            num_heads,
-            in_proj_weight,
-            in_proj_bias,
-            bias_k,
-            bias_v,
-            add_zero_attn,
-            dropout_p,
-            out_proj_weight,
-            out_proj_bias,
-            training=training,
-            key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
-            attn_mask=attn_mask,
-            use_separate_proj_weight=use_separate_proj_weight,
-            q_proj_weight=q_proj_weight,
-            k_proj_weight=k_proj_weight,
-            v_proj_weight=v_proj_weight,
-            static_k=static_k,
-            static_v=static_v,
-        )
-
     # set up shape vars
     tgt_len, bsz, embed_dim = query.shape
     src_len, _, _ = key.shape
