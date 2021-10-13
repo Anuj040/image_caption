@@ -31,7 +31,7 @@ def load_captions_data(
         text_data = []
         images_to_skip = set()
 
-        for line in caption_data[:100]:
+        for line in caption_data:
             line = line.rstrip("\n")
             # Image name and captions are separated using a tab
             img_name, caption = line.split("\t")
@@ -144,13 +144,13 @@ def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarr
             embedding_matrix[index] = glove_embedding[word]
         else:
             not_in_glove_index.append(index)
-    expanded_embedding_matrix = np.zeros(
-        (len(vocab) + 1, embed_dim + len(not_in_glove_index))
-    )
+
+    embed_dim_ext = len(not_in_glove_index)
+    expanded_embedding_matrix = np.zeros((len(vocab) + 1, embed_dim + embed_dim_ext))
     expanded_embedding_matrix[..., :embed_dim] = embedding_matrix
     placeholder = embed_dim
     for index in not_in_glove_index:
         expanded_embedding_matrix[index, placeholder] = 1.0
         placeholder += 1
 
-    return expanded_embedding_matrix, embed_dim + len(not_in_glove_index)
+    return expanded_embedding_matrix, embed_dim + embed_dim_ext

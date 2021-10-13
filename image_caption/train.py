@@ -119,7 +119,7 @@ class Caption:
         if not self.use_pretrained:
             return vocab_size, train_loader, valid_loader, None
 
-        embedding_matrix, self.image_embed_size = prepare_embeddings(
+        embedding_matrix, self.text_embed_size = prepare_embeddings(
             "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
         )
         return vocab_size, train_loader, valid_loader, embedding_matrix
@@ -150,6 +150,7 @@ class Caption:
         self.decoder: nn.Module = TransformerDecoderBlock(
             vocab_size,
             seq_length,
+            self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
             3 * self.num_heads,
@@ -349,5 +350,5 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
+    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
     model.train(seq_length=25, epochs=10, batch_size=4)
