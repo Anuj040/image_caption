@@ -119,7 +119,7 @@ class Caption:
         if not self.use_pretrained:
             return vocab_size, train_loader, valid_loader, None
 
-        embedding_matrix = prepare_embeddings(
+        embedding_matrix, self.image_embed_size = prepare_embeddings(
             "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
         )
         return vocab_size, train_loader, valid_loader, embedding_matrix
