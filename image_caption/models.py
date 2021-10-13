@@ -113,9 +113,9 @@ class PositionalEmbedding(nn.Module):
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
 
         if not use_alibi:
-            #! Try train short, test long: https://arxiv.org/abs/2108.12409
-            #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
-            #! course_UvA-DL/05-transformers-and-MH-attention.html
+            # From train short, test long: https://arxiv.org/abs/2108.12409
+            # https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
+            # course_UvA-DL/05-transformers-and-MH-attention.html
             self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
         self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)
@@ -194,8 +194,6 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
-        # self.act_2 = nn.Softmax(dim=-1)
-        # self.supports_masking = True
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
