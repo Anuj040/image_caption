@@ -73,8 +73,6 @@ class TransformerEncoderBlock(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """feature encoder's forward pass"""
-        # inputs = self.layernorm_1(inputs)
-
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -203,7 +201,7 @@ class TransformerDecoderBlock(nn.Module):
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
         inputs = self.embedding(inputs)
-        inputs = self.dropout(self.act(self.layernorm(self.ffn_layer(inputs))))
+        inputs = self.layernorm(self.ffn_layer(inputs))
         padding_mask = None
         if mask is not None:
             padding_mask = 1.0 - torch.unsqueeze(mask, -1)
@@ -255,7 +253,6 @@ class TransformerDecoderBlock(nn.Module):
 
         ffn_out = self.dropout_2(ffn_out)
         preds = self.out(ffn_out)
-        # preds = self.act_2(self.out(ffn_out))
         return preds
 
     @staticmethod

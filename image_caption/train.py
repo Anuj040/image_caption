@@ -346,7 +346,7 @@ class Caption:
             "valid_loss", loss_total / loss_count / self.num_captions, step
         )
         writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
-        return loss_total / loss_count
+        return loss_total / loss_count / self.num_captions
 
 
 if __name__ == "__main__":  # pragma: no cover
