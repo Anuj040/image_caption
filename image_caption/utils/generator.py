@@ -6,6 +6,7 @@ import os
 import re
 from typing import Callable, List, Tuple
 
+import numpy as np
 import spacy
 import torch
 from PIL import Image
@@ -17,6 +18,7 @@ SPACY_ENG = spacy.load("en_core_web_sm")
 from image_caption.utils.data_utils import load_captions_data, train_val_split
 
 
+# pylint: disable = attribute-defined-outside-init
 class Vocabulary:
     """Vocabulary building object"""
 
@@ -58,6 +60,12 @@ class Vocabulary:
                     idx += 1
                 else:
                     frequency[word] += 1
+        self.weights = np.ones(len(self.itos)) * len(sentences)
+        for idx in range(4, len(self.itos)):
+            word = self.itos[idx]
+            freq = frequency[word]
+            self.weights[idx] = freq
+        self.weights = self.weights / max(self.weights)
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
@@ -183,7 +191,6 @@ if __name__ == "__main__":  # pragma: no cover
     dataset = CaptionDataset()
 
     out = dataset[100]
-    import numpy as np
 
     out[0].show()
     print([dataset.vocab.itos[key] for key in np.array(out[1])])
