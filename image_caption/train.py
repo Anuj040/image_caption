@@ -308,7 +308,10 @@ class Caption:
         batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(
-            batch_seq_true, batch_seq_pred, mask, torch.Tensor(loss_weights[:, 1:])
+            batch_seq_true,
+            batch_seq_pred,
+            mask,
+            torch.Tensor(loss_weights[:, 1:]).to(DEVICE),
         )
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
 

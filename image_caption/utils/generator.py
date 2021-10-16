@@ -65,7 +65,7 @@ class Vocabulary:
             word = self.itos[idx]
             freq = frequency[word]
             self.weights[idx] = freq
-        self.weights = self.weights / max(self.weights)
+        self.weights = 1.0 / self.weights ** (0.4)
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
