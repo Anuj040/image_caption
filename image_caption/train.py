@@ -232,6 +232,7 @@ class Caption:
                         "encoder": self.encoder.state_dict(),
                         "decoder": self.decoder.state_dict(),
                         "optim_state": optimizer.state_dict(),
+                        "scheduler": swa_scheduler.state_dict(),
                     },
                     f"checkpoint/{now}/model-{valid_loss:.4f}.pth",
                 )
