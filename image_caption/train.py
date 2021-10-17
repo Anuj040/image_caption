@@ -118,6 +118,7 @@ class Caption:
             collate_fn=Collate(pad_value, self.num_captions),
         )
         if not self.use_pretrained:
+            self.text_embed_size = self.image_embed_size
             return vocab_size, train_loader, valid_loader, None
 
         embedding_matrix, self.text_embed_size = prepare_embeddings(
@@ -168,8 +169,8 @@ class Caption:
         lrate = 3e-4
         optimizer = Adam(
             [
-                {"params": self.encoder.parameters(), "lr": lrate},
-                {"params": self.decoder.parameters(), "lr": lrate},
+                {"params": self.encoder.parameters(), "lr": 1e-9},
+                {"params": self.decoder.parameters(), "lr": 1e-9},
             ]
         )
         swa_scheduler = torch.optim.swa_utils.SWALR(
@@ -212,7 +213,6 @@ class Caption:
                     scaler.update()
 
                     optimizer.zero_grad()
-                    swa_scheduler.step()
                     batch_loss += loss
                     batch_acc += acc
 
@@ -234,6 +234,7 @@ class Caption:
                     self.decoder.state_dict(),
                     f"checkpoint/{now}/decoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
                 )
+            swa_scheduler.step()
 
     def calculate_loss(
         self,
@@ -369,5 +370,5 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
     model.train(seq_length=25, epochs=10, batch_size=4)
