@@ -227,12 +227,13 @@ class Caption:
             if current_val_loss < valid_loss:
                 valid_loss = current_val_loss
                 torch.save(
-                    self.encoder.state_dict(),
-                    f"checkpoint/{now}/encoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
-                )
-                torch.save(
-                    self.decoder.state_dict(),
-                    f"checkpoint/{now}/decoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
+                    {
+                        "epoch": epoch + 1,
+                        "encoder": self.encoder.state_dict(),
+                        "decoder": self.decoder.state_dict(),
+                        "optim_state": optimizer.state_dict(),
+                    },
+                    f"checkpoint/{now}/model-{valid_loss:.4f}.pth",
                 )
             swa_scheduler.step()
 
