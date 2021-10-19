@@ -288,7 +288,9 @@ if __name__ == "__main__":  # pragma: no cover
     c = encoder(b)
     print(c.detach().numpy().shape)
 
-    decoder = TransformerDecoderBlock(VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, FF_DIM, 2)
+    decoder = TransformerDecoderBlock(
+        VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, EMBED_DIM, FF_DIM, 2
+    )
     a = torch.randint(0, 10, (3, SEQ_LENGTH))
     MASK = (a > 4 - 1).to(float)
     d = decoder(a, c, mask=MASK)

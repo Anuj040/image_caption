@@ -37,7 +37,7 @@ class Vocabulary:
     def __len__(self):
         return len(self.itos)
 
-    def tokenizer_eng(self, text):
+    def tokenizer_eng(self, text: str):
         """creates a token vector from a literal phrase"""
         text = self.standardize(text)
         return [tok.text.lower() for tok in SPACY_ENG.tokenizer(text)]
@@ -60,12 +60,6 @@ class Vocabulary:
                     idx += 1
                 else:
                     frequency[word] += 1
-        self.weights = np.ones(len(self.itos)) * len(sentences)
-        for idx in range(4, len(self.itos)):
-            word = self.itos[idx]
-            freq = frequency[word]
-            self.weights[idx] = freq
-        self.weights = 1.0 / self.weights ** (0.4)
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
