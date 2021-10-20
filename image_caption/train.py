@@ -117,9 +117,10 @@ class Caption:
             collate_fn=Collate(pad_value, self.num_captions),
         )
         if not self.use_pretrained:
+            self.text_embed_size = self.image_embed_size
             return vocab_size, train_loader, valid_loader, None
 
-        embedding_matrix = prepare_embeddings(
+        embedding_matrix, self.text_embed_size = prepare_embeddings(
             "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
         )
         return vocab_size, train_loader, valid_loader, embedding_matrix
@@ -150,6 +151,7 @@ class Caption:
         self.decoder: nn.Module = TransformerDecoderBlock(
             vocab_size,
             seq_length,
+            self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
             3 * self.num_heads,
@@ -166,8 +168,8 @@ class Caption:
         lrate = 3e-4
         optimizer = Adam(
             [
-                {"params": self.encoder.parameters(), "lr": lrate},
-                {"params": self.decoder.parameters(), "lr": lrate},
+                {"params": self.encoder.parameters(), "lr": 1e-9},
+                {"params": self.decoder.parameters(), "lr": 1e-9},
             ]
         )
         swa_scheduler = torch.optim.swa_utils.SWALR(
@@ -210,7 +212,6 @@ class Caption:
                     scaler.update()
 
                     optimizer.zero_grad()
-                    swa_scheduler.step()
                     batch_loss += loss
                     batch_acc += acc
 
@@ -225,16 +226,22 @@ class Caption:
             if current_val_loss < valid_loss:
                 valid_loss = current_val_loss
                 torch.save(
-                    self.encoder.state_dict(),
-                    f"checkpoint/{now}/encoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
+                    {
+                        "epoch": epoch + 1,
+                        "encoder": self.encoder.state_dict(),
+                        "decoder": self.decoder.state_dict(),
+                        "optim_state": optimizer.state_dict(),
+                        "scheduler": swa_scheduler.state_dict(),
+                    },
+                    f"checkpoint/{now}/model-{valid_loss:.4f}.pth",
                 )
-                torch.save(
-                    self.decoder.state_dict(),
-                    f"checkpoint/{now}/decoder-epoch-{epoch}-loss-{valid_loss:.4f}.pth",
-                )
+            swa_scheduler.step()
 
     def calculate_loss(
-        self, y_true: torch.Tensor, y_pred: torch.Tensor, mask: torch.Tensor
+        self,
+        y_true: torch.Tensor,
+        y_pred: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
         """calculates the error between prediction and ground truth
 
@@ -345,7 +352,7 @@ class Caption:
             "valid_loss", loss_total / loss_count / self.num_captions, step
         )
         writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
-        return loss_total / loss_count
+        return loss_total / loss_count / self.num_captions
 
 
 if __name__ == "__main__":  # pragma: no cover

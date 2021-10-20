@@ -6,6 +6,7 @@ import os
 import re
 from typing import Callable, List, Tuple
 
+import numpy as np
 import spacy
 import torch
 from PIL import Image
@@ -17,6 +18,7 @@ SPACY_ENG = spacy.load("en_core_web_sm")
 from image_caption.utils.data_utils import load_captions_data, train_val_split
 
 
+# pylint: disable = attribute-defined-outside-init
 class Vocabulary:
     """Vocabulary building object"""
 
@@ -35,7 +37,7 @@ class Vocabulary:
     def __len__(self):
         return len(self.itos)
 
-    def tokenizer_eng(self, text):
+    def tokenizer_eng(self, text: str):
         """creates a token vector from a literal phrase"""
         text = self.standardize(text)
         return [tok.text.lower() for tok in SPACY_ENG.tokenizer(text)]
@@ -183,7 +185,6 @@ if __name__ == "__main__":  # pragma: no cover
     dataset = CaptionDataset()
 
     out = dataset[100]
-    import numpy as np
 
     out[0].show()
     print([dataset.vocab.itos[key] for key in np.array(out[1])])

@@ -73,8 +73,6 @@ class TransformerEncoderBlock(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """feature encoder's forward pass"""
-        inputs = self.layernorm_1(inputs)
-
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -113,9 +111,9 @@ class PositionalEmbedding(nn.Module):
         self.token_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
 
         if not use_alibi:
-            #! Try train short, test long: https://arxiv.org/abs/2108.12409
-            #! https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
-            #! course_UvA-DL/05-transformers-and-MH-attention.html
+            # From train short, test long: https://arxiv.org/abs/2108.12409
+            # https://pytorch-lightning.readthedocs.io/en/latest/notebooks/
+            # course_UvA-DL/05-transformers-and-MH-attention.html
             self.position_embeddings = torch.nn.Embedding(sequence_length, embed_dim)
 
         self.embed_scale = torch.sqrt(torch.Tensor([embed_dim])).to(DEVICE)
@@ -144,6 +142,7 @@ class TransformerDecoderBlock(nn.Module):
         self,
         vocab_size: int,
         seq_length: int,
+        text_embed_dim: int,
         embed_dim: int,
         ff_dim: int,
         num_heads: int,
@@ -164,11 +163,15 @@ class TransformerDecoderBlock(nn.Module):
         self.use_alibi = use_alibi
 
         self.embedding = PositionalEmbedding(
-            embed_dim=embed_dim,
+            embed_dim=text_embed_dim,
             sequence_length=seq_length,
             vocab_size=vocab_size,
             use_alibi=use_alibi,
         )
+        self.ffn_layer = nn.Linear(text_embed_dim, embed_dim, bias=False)
+        self.layernorm = nn.LayerNorm(embed_dim)
+        self.act = nn.ReLU()
+        self.dropout = nn.Dropout(0.3)
 
         self.attention_1 = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
@@ -194,12 +197,11 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
-        # self.act_2 = nn.Softmax(dim=-1)
-        # self.supports_masking = True
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
         inputs = self.embedding(inputs)
+        inputs = self.layernorm(self.ffn_layer(inputs))
         padding_mask = None
         if mask is not None:
             padding_mask = 1.0 - torch.unsqueeze(mask, -1)
@@ -251,7 +253,6 @@ class TransformerDecoderBlock(nn.Module):
 
         ffn_out = self.dropout_2(ffn_out)
         preds = self.out(ffn_out)
-        # preds = self.act_2(self.out(ffn_out))
         return preds
 
     @staticmethod
@@ -287,7 +288,9 @@ if __name__ == "__main__":  # pragma: no cover
     c = encoder(b)
     print(c.detach().numpy().shape)
 
-    decoder = TransformerDecoderBlock(VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, FF_DIM, 2)
+    decoder = TransformerDecoderBlock(
+        VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, EMBED_DIM, FF_DIM, 2
+    )
     a = torch.randint(0, 10, (3, SEQ_LENGTH))
     MASK = (a > 4 - 1).to(float)
     d = decoder(a, c, mask=MASK)
