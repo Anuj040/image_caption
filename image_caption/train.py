@@ -125,17 +125,39 @@ class Caption:
         )
         return vocab_size, train_loader, valid_loader, embedding_matrix
 
+    def get_current_state(self, path: str) -> Tuple[int, dict, dict]:
+        """reloads the current state dict for models and auxillaries
+
+        Args:
+            path (str): path to the checkpoint
+
+        Returns:
+            Tuple[int, dict, dict]: current epoch number, optimizer and scheduler states
+        """
+        print(f"=> loading checkpoint '{path}'")
+        checkpoint = torch.load(path)
+        self.encoder.load_state_dict(checkpoint["encoder"])
+        self.decoder.load_state_dict(checkpoint["decoder"])
+        return checkpoint["epoch"], checkpoint["optim_state"], checkpoint["scheduler"]
+
+    # pylint: disable = too-many-arguments
     def train(
         self,
         seq_length: int = 25,
         epochs: int = 10,
         batch_size: int = 64,
         num_workers: int = 8,
+        reload_path: Optional[str] = None,
     ) -> None:
         """preparation of model definitions and execute train/valid step
 
         Args:
             seq_length (int, optional): Fixed length allowed for any sequence. Defaults to 25.
+            epochs (int, optional): Total epochs to run. Defaults to 10.
+            batch_size (int, optional): Defaults to 64.
+            num_workers (int, optional): Defaults to 8.
+            reload_path (Optional[str], optional): Checkpoint path, if provided, model
+                    train will resume from the checkpoint. Defaults to None.
         """
         vocab_size, train_loader, valid_loader, embedding_matrix = self.generators(
             seq_length, batch_size, num_workers
@@ -175,22 +197,34 @@ class Caption:
         swa_scheduler = torch.optim.swa_utils.SWALR(
             optimizer,
             anneal_strategy="cos",
-            anneal_epochs=int(0.2 * epochs),
+            anneal_epochs=2,
             swa_lr=lrate,
         )
+        if reload_path:
+            # Resume from checkpoint
+            start_epoch, optim_state, scheduler_state = self.get_current_state(
+                reload_path
+            )
+            optimizer.load_state_dict(optim_state)
+            swa_scheduler.load_state_dict(scheduler_state)
+
+            # Logging and checkpoints
+            now = os.path.basename(os.path.dirname(reload_path))
+            writer = SummaryWriter(f"log/{now}")
+        else:
+            start_epoch = 0
+            # Logging and checkpoints
+            now = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
+            os.makedirs(f"checkpoint/{now}", exist_ok=True)
+            writer = SummaryWriter(f"log/{now}")
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
         self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
-        # Logging and checkpoints
-        now = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
-        os.makedirs(f"checkpoint/{now}", exist_ok=True)
-        writer = SummaryWriter(f"log/{now}")
-
         # Initialize validation loss
         valid_loss = 1e9
         # Run loop
-        for epoch in range(0, epochs):
+        for epoch in range(start_epoch, epochs):
 
             self.encoder.train()
             self.decoder.train()
@@ -233,7 +267,7 @@ class Caption:
                         "optim_state": optimizer.state_dict(),
                         "scheduler": swa_scheduler.state_dict(),
                     },
-                    f"checkpoint/{now}/model-{valid_loss:.4f}.pth",
+                    f"checkpoint/{now}/model-{epoch+1:04d}-{valid_loss:.4f}.pth",
                 )
             swa_scheduler.step()
 
@@ -357,4 +391,9 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    model.train(seq_length=25, epochs=10, batch_size=4)
+    model.train(
+        seq_length=25,
+        epochs=20,
+        batch_size=4,
+        reload_path="checkpoint/17102021_135650/model-0.7740.pth",
+    )
