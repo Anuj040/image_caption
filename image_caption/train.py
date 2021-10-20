@@ -135,7 +135,7 @@ class Caption:
             Tuple[int, dict, dict]: current epoch number, optimizer and scheduler states
         """
         print(f"=> loading checkpoint '{path}'")
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, map_location=torch.device(DEVICE))
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.decoder.load_state_dict(checkpoint["decoder"])
         return checkpoint["epoch"], checkpoint["optim_state"], checkpoint["scheduler"]
