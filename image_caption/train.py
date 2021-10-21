@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
@@ -398,12 +399,111 @@ class Caption:
         writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
         return loss_total / loss_count / self.num_captions
 
+    def infer(
+        self,
+        seq_length: int = 25,
+        reload_path: Optional[str] = None,
+    ) -> None:
+        """preparation of model definitions and execute train/valid step
+
+        Args:
+            seq_length (int, optional): Fixed length allowed for any sequence. Defaults to 25.
+            epochs (int, optional): Total epochs to run. Defaults to 10.
+            batch_size (int, optional): Defaults to 64.
+            num_workers (int, optional): Defaults to 8.
+            reload_path (Optional[str], optional): Checkpoint path, if provided, model
+                    train will resume from the checkpoint. Defaults to None.
+        """
+        # Data augmentation for image data
+        image_size = (224, 224)
+        img_transform = transforms.Compose(
+            [
+                # transforms.Resize(image_size),
+                transforms.ToTensor(),
+                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+            ]
+        )
+        # Prepare the vocab
+        train_dataset = CaptionDataset(seq_length=seq_length)
+        vocab_size = len(train_dataset.vocab)
+
+        if not self.use_pretrained:
+            self.text_embed_size = self.image_embed_size
+        else:
+            _, self.text_embed_size = prepare_embeddings(
+                "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
+            )
+        # Model definitions
+        cnn_model: nn.Module = CNNModel(trainable=self.trainable).to(DEVICE)
+        self.encoder: nn.Module = TransformerEncoderBlock(
+            self.image_embed_size,
+            num_heads=self.num_heads,
+            input_embed_size=self.input_embed_size,
+        ).to(DEVICE)
+        self.decoder: nn.Module = TransformerDecoderBlock(
+            vocab_size,
+            seq_length,
+            self.text_embed_size,
+            self.image_embed_size,
+            self.ff_dim,
+            3 * self.num_heads,
+            self.use_alibi,
+        ).to(DEVICE)
+        print(f"=> loading checkpoint '{reload_path}'")
+        checkpoint = torch.load(reload_path, map_location=torch.device(DEVICE))
+        self.encoder.load_state_dict(checkpoint["encoder"])
+        self.decoder.load_state_dict(checkpoint["decoder"])
+        print(self.encoder.attention_1.bias_k)
+        exit()
+
+        if reload_path:
+            # Logging and checkpoints
+            now = os.path.basename(os.path.dirname(reload_path))
+
+            loss_regex = r"-(\d*.\d{4})"
+            matches = re.search(loss_regex, os.path.basename(reload_path))
+
+        self.encoder.eval()
+        self.decoder.eval()
+        img_path = "datasets/Flicker8k_Dataset/44856031_0d82c2c7d1.jpg"
+        img = Image.open(img_path).convert("RGB")
+        img = img_transform(img).unsqueeze(0)
+
+        # Pass the image to the CNN
+        img = cnn_model(img)
+
+        # Pass the image features to the Transformer encoder
+        encoded_img = self.encoder(img)
+
+        # Generate the caption using the Transformer decoder
+        decoded_caption = "<SOS>"
+        input_seq = [train_dataset.vocab.stoi["<SOS>"]]
+        for i in range(seq_length):
+            pred = self.decoder(
+                torch.Tensor(input_seq).to(dtype=torch.int32).unsqueeze(0),
+                encoded_img,
+                None,
+            )
+            sampled_token_index = int(torch.argmax(pred[0, i, :]))
+            sampled_token = train_dataset.vocab.itos[sampled_token_index]
+            if sampled_token == "<EOS>":
+                break
+            decoded_caption += " " + sampled_token
+            input_seq += [sampled_token_index]
+
+        decoded_caption = decoded_caption.replace("<SOS>", "") + "."
+        print("Predicted Caption: ", decoded_caption)
+
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    model.train(
+    model = Caption(trainable=False, use_pretrained=True, use_alibi=True)
+    # model.train(
+    #     seq_length=25,
+    #     epochs=25,
+    #     batch_size=4,
+    #     reload_path="checkpoint/17102021_135650/model-0021-0.5083.pth",
+    # )
+    model.infer(
         seq_length=25,
-        epochs=25,
-        batch_size=4,
-        reload_path="checkpoint/17102021_135650/model-0017-0.5941.pth",
+        reload_path="checkpoint/19102021_123738/model-0026-1.9245.pth",
     )
