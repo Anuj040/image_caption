@@ -76,6 +76,7 @@ class Caption:
                 transforms.Resize((356, 356)),
                 transforms.RandomCrop(image_size),
                 transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
                 transforms.ToTensor(),
                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
@@ -141,7 +142,7 @@ class Caption:
         self.decoder.load_state_dict(checkpoint["decoder"])
         return checkpoint["epoch"], checkpoint["optim_state"], checkpoint["scheduler"]
 
-    # pylint: disable = too-many-arguments
+    # pylint: disable = too-many-arguments, too-many-statements
     def train(
         self,
         seq_length: int = 25,
