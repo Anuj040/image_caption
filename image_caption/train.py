@@ -1,6 +1,7 @@
 """model definition, train procedure and the essentials"""
 import datetime
 import os
+import re
 from typing import Optional, Tuple
 
 import numpy as np
@@ -211,6 +212,13 @@ class Caption:
             # Logging and checkpoints
             now = os.path.basename(os.path.dirname(reload_path))
             writer = SummaryWriter(f"log/{now}")
+
+            loss_regex = r"-(\d*.\d{4})"
+            matches = re.search(loss_regex, os.path.basename(reload_path))
+
+            # Initialize validation loss from saved state
+            valid_loss = float(matches.group(1))
+
         else:
             start_epoch = 0
             # Logging and checkpoints
@@ -218,11 +226,12 @@ class Caption:
             os.makedirs(f"checkpoint/{now}", exist_ok=True)
             writer = SummaryWriter(f"log/{now}")
 
+            # Initialize validation loss
+            valid_loss = 1e9
+
         scaler = GradScaler(enabled=torch.cuda.is_available())
         self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
-        # Initialize validation loss
-        valid_loss = 1e9
         # Run loop
         for epoch in range(start_epoch, epochs):
 
@@ -393,7 +402,7 @@ if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
     model.train(
         seq_length=25,
-        epochs=20,
+        epochs=25,
         batch_size=4,
-        reload_path="checkpoint/17102021_135650/model-0.7740.pth",
+        reload_path="checkpoint/17102021_135650/model-0017-0.5941.pth",
     )
