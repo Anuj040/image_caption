@@ -120,7 +120,6 @@ def _scaled_dot_product_attention(
         attn_adjust[:, index, ...] = softmax(
             attn[:, : index + 1, ...], dim=softmax_dim
         )[:, index, ...]
-    print(attn_adjust)
     attn = attn_adjust
 
     if dropout_p > 0.0:
