@@ -1,5 +1,6 @@
 # pylint: disable-all"
 import math
+import warnings
 from typing import List, Optional, Tuple
 
 import torch
@@ -112,6 +113,16 @@ def _scaled_dot_product_attention(
     if attn_mask is not None:
         attn += attn_mask
     attn = softmax(attn, dim=softmax_dim)
+
+    # attn for given token should dependent only on
+    # tokens prior to that token
+    attn_adjust = torch.ones_like(attn)
+    for index in range(1, attn.size(1)):
+        attn_adjust[:, index, ...] = attn[:, index, ...] / torch.sum(
+            attn[:, : index + 1, ...], dim=1
+        )
+    attn = attn_adjust
+
     if dropout_p > 0.0:
         attn = dropout(attn, p=dropout_p)
     # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
