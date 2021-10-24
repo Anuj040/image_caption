@@ -7,11 +7,23 @@ import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
-from image_caption.utils.activation import CustomMultiheadAttention
 from image_caption.utils.model_utils import get_alibi_mask
 
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# pylint: disable = useless-super-delegation
+class Identity(nn.Module):
+    """Custom module for replacing unnecessry layers from pretrained models"""
+
+    def __init__(self):
+        """Initialize"""
+        super().__init__()
+
+    @staticmethod
+    def forward(inputs: torch.Tensor) -> torch.Tensor:
+        "forward pass"
+        return inputs
 
 
 class CNNModel(nn.Module):
@@ -27,6 +39,10 @@ class CNNModel(nn.Module):
         super().__init__()
         backbone = EfficientNet.from_name("efficientnet-b0", include_top=False)
         backbone.requires_grad = trainable
+        # Remove Unnecessary layers
+        backbone._bn1 = Identity()
+        backbone._avg_pooling = Identity()
+        backbone._swish = Identity()
         sequence = [backbone]
         self.model = nn.Sequential(*sequence)
 
@@ -130,9 +146,6 @@ class PositionalEmbedding(nn.Module):
         embedded_positions = self.position_embeddings(positions)
         return embedded_tokens + embedded_positions
 
-    # def compute_mask(self, inputs, mask=None):
-    #     return torch.not_equal(inputs, 0)
-
 
 # pylint: disable = too-many-instance-attributes, too-many-arguments
 class TransformerDecoderBlock(nn.Module):
@@ -178,13 +191,8 @@ class TransformerDecoderBlock(nn.Module):
         )
         self.layernorm_1 = nn.LayerNorm(embed_dim)
 
-        self.attention_2 = CustomMultiheadAttention(
-            embed_dim,
-            num_heads,
-            dropout_p=0.1,
-            bias=True,
-            batch_first=True,
-            softmax_dim=1,
+        self.attention_2 = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
         )
         self.layernorm_2 = nn.LayerNorm(embed_dim)
 
@@ -241,7 +249,7 @@ class TransformerDecoderBlock(nn.Module):
             key=encoder_outputs,
             value=encoder_outputs,
             need_weights=False,
-            attn_mask=padding_mask,
+            attn_mask=None,
         )
         out_2 = self.layernorm_2(out_1 + attention_output_2)
 
