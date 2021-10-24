@@ -94,6 +94,7 @@ class Caption:
         # Prepare the dataloaders
         train_dataset = CaptionDataset(seq_length=seq_length, transform=train_transform)
         vocab_size = len(train_dataset.vocab)
+        self.loss_weights = torch.Tensor(train_dataset.vocab.weights)
 
         self.ignore_indices = [
             train_dataset.vocab.stoi["<PAD>"],
@@ -251,7 +252,7 @@ class Caption:
                     optimizer.step()
                     with autocast(enabled=torch.cuda.is_available()):
                         loss, acc = self._compute_caption_loss_and_acc(
-                            img_embed, caption.to(DEVICE)
+                            img_embed, caption.to(DEVICE), self.loss_weights
                         )
                     scaler.scale(loss).backward(retain_graph=True)
                     scaler.step(optimizer)
@@ -267,7 +268,9 @@ class Caption:
                     writer.add_scalar("loss", batch_loss / self.num_captions, step)
                     writer.add_scalar("acc", batch_acc / self.num_captions, step)
             # Evaluation step
-            current_val_loss = self.valid(cnn_model, valid_loader, writer, epoch + 1)
+            current_val_loss = self.valid(
+                cnn_model, valid_loader, writer, epoch + 1, vocab_size
+            )
 
             if current_val_loss < valid_loss:
                 valid_loss = current_val_loss
@@ -283,11 +286,12 @@ class Caption:
                 )
             swa_scheduler.step()
 
+    @staticmethod
     def calculate_loss(
-        self,
         y_true: torch.Tensor,
         y_pred: torch.Tensor,
         mask: torch.Tensor,
+        loss_weights: torch.Tensor,
     ) -> torch.Tensor:
         """calculates the error between prediction and ground truth
 
@@ -295,6 +299,8 @@ class Caption:
             y_true (torch.Tensor): target sequence
             y_pred (torch.Tensor): predicted sequence prob. matrix (N * vocab_size * seq_len)
             mask (torch.Tensor):
+            loss_weights (torch.Tensor): class weight for each token dependent on their occurence
+                        frequency
 
         Returns:
             torch.Tensor: loss value
@@ -307,7 +313,7 @@ class Caption:
             .transpose(-2, -1)
             .to(dtype=torch.float32)
         )
-        loss = torch.mean(torch.abs(one_hot_true - y_pred), dim=1) * mask
+        loss = torch.mean(torch.abs(one_hot_true - y_pred) * loss_weights, dim=1) * mask
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -329,7 +335,10 @@ class Caption:
         return torch.sum(accuracy) / torch.sum(mask.to(float))
 
     def _compute_caption_loss_and_acc(
-        self, img_embed: torch.Tensor, batch_seq: torch.Tensor
+        self,
+        img_embed: torch.Tensor,
+        batch_seq: torch.Tensor,
+        loss_weights: torch.Tensor,
     ) -> Tuple[torch.Tensor]:
         """
             1. uses image embeddings to predict the caption
@@ -339,6 +348,8 @@ class Caption:
         Args:
             img_embed (torch.Tensor): image embeddings from feature extractor netowrk
             batch_seq (torch.Tensor): ground truth sequence (captions)
+            loss_weights (torch.Tensor): class weight for each token dependent on their occurence
+                        frequency
 
         Returns:
             Tuple[torch.Tensor]: loss/acc values
@@ -356,7 +367,7 @@ class Caption:
 
         batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
-        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask)
+        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask, loss_weights)
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
 
         del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
@@ -364,7 +375,12 @@ class Caption:
         return loss, acc
 
     def valid(
-        self, cnn_model: nn.Module, loader: DataLoader, writer: SummaryWriter, step: int
+        self,
+        cnn_model: nn.Module,
+        loader: DataLoader,
+        writer: SummaryWriter,
+        step: int,
+        vocab_size: int,
     ) -> Tuple[float]:
         """model evaluation step executor
 
@@ -372,7 +388,8 @@ class Caption:
             cnn_model (nn.Module): image feature extracotor
             dataloader (DataLoader): validation data loader
             writer (SummaryWriter): tensorboard summary writer object
-            step (int): train step
+            step (int): train epoch
+            vocab_size (int):
 
         Returns:
             float: validation loss
@@ -391,7 +408,11 @@ class Caption:
             batch_acc = 0.0
             for caption in captions:
                 loss, acc = self._compute_caption_loss_and_acc(
-                    img_embed, caption.to(DEVICE)
+                    img_embed,
+                    caption.to(DEVICE),
+                    torch.ones(
+                        [1, vocab_size, 1]
+                    ),  # For validation step all tokens weighed equally
                 )
                 batch_loss += loss
                 batch_acc += acc
@@ -510,5 +531,5 @@ if __name__ == "__main__":  # pragma: no cover
     # )
     model.infer(
         seq_length=25,
-        reload_path="checkpoint/24102021_195251/model-0003-0.0101.pth",
+        reload_path="checkpoint/24102021_205852/model-0001-0.4630.pth",
     )

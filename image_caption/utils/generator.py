@@ -60,6 +60,13 @@ class Vocabulary:
                     idx += 1
                 else:
                     frequency[word] += 1
+        self.weights = np.ones(len(self.itos)) * len(sentences)
+        for idx in range(4, len(self.itos)):
+            word = self.itos[idx]
+            freq = frequency[word]
+            self.weights[idx] = freq
+        self.weights = 1 / self.weights ** (0.4)
+        self.weights = np.expand_dims(np.expand_dims(self.weights, axis=0), axis=-1)
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
