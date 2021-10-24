@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
@@ -71,7 +72,7 @@ class Caption:
             Optional[np.ndarray]: pretrained Embedding matrix
         """
         # Data augmentation for image data
-        image_size = (224, 224)
+        image_size = (256, 224)
         train_transform = transforms.Compose(
             [
                 transforms.Resize((356, 356)),
@@ -232,7 +233,7 @@ class Caption:
             valid_loss = 1e9
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
-        self.loss_fn = nn.CrossEntropyLoss(reduction="none")
+        # self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
         # Run loop
         for epoch in range(start_epoch, epochs):
@@ -266,7 +267,7 @@ class Caption:
                     writer.add_scalar("loss", batch_loss / self.num_captions, step)
                     writer.add_scalar("acc", batch_acc / self.num_captions, step)
             # Evaluation step
-            current_val_loss = self.valid(cnn_model, valid_loader, writer, step)
+            current_val_loss = self.valid(cnn_model, valid_loader, writer, epoch + 1)
 
             if current_val_loss < valid_loss:
                 valid_loss = current_val_loss
@@ -299,7 +300,14 @@ class Caption:
             torch.Tensor: loss value
         """
         mask = mask.to(dtype=float)
-        loss = self.loss_fn(y_pred, y_true) * mask
+        # loss = self.loss_fn(y_pred, y_true) * mask
+
+        one_hot_true = (
+            F.one_hot(y_true, num_classes=y_pred.size(1))
+            .transpose(-2, -1)
+            .to(dtype=torch.float32)
+        )
+        loss = torch.mean(torch.abs(one_hot_true - y_pred), dim=1) * mask
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -453,8 +461,6 @@ class Caption:
         checkpoint = torch.load(reload_path, map_location=torch.device(DEVICE))
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.decoder.load_state_dict(checkpoint["decoder"])
-        print(self.encoder.attention_1.bias_k)
-        exit()
 
         if reload_path:
             # Logging and checkpoints
@@ -465,13 +471,13 @@ class Caption:
 
         self.encoder.eval()
         self.decoder.eval()
-        img_path = "datasets/Flicker8k_Dataset/44856031_0d82c2c7d1.jpg"
+        img_path = "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg"
+        img_path = "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg"
         img = Image.open(img_path).convert("RGB")
         img = img_transform(img).unsqueeze(0)
 
         # Pass the image to the CNN
         img = cnn_model(img)
-
         # Pass the image features to the Transformer encoder
         encoded_img = self.encoder(img)
 
@@ -490,20 +496,19 @@ class Caption:
                 break
             decoded_caption += " " + sampled_token
             input_seq += [sampled_token_index]
-
         decoded_caption = decoded_caption.replace("<SOS>", "") + "."
         print("Predicted Caption: ", decoded_caption)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=True, use_alibi=True)
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
     # model.train(
     #     seq_length=25,
-    #     epochs=25,
+    #     epochs=5,
     #     batch_size=4,
-    #     reload_path="checkpoint/17102021_135650/model-0021-0.5083.pth",
+    #     # reload_path="checkpoint/24102021_171800/model-0005-3.3556.pth",
     # )
     model.infer(
         seq_length=25,
-        reload_path="checkpoint/19102021_123738/model-0026-1.9245.pth",
+        reload_path="checkpoint/24102021_195251/model-0003-0.0101.pth",
     )
