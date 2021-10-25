@@ -313,7 +313,11 @@ class Caption:
             .transpose(-2, -1)
             .to(dtype=torch.float32)
         )
-        loss = torch.mean(torch.abs(one_hot_true - y_pred) * loss_weights, dim=1) * mask
+        loss = (
+            torch.abs(one_hot_true - y_pred)
+            * loss_weights.to(DEVICE)
+            * mask.unsqueeze(1)
+        )
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -493,7 +497,7 @@ class Caption:
         self.encoder.eval()
         self.decoder.eval()
         img_path = "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg"
-        img_path = "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg"
+        # img_path = "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg"
         img = Image.open(img_path).convert("RGB")
         img = img_transform(img).unsqueeze(0)
 
@@ -525,11 +529,11 @@ if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
     # model.train(
     #     seq_length=25,
-    #     epochs=5,
+    #     epochs=10,
     #     batch_size=4,
-    #     # reload_path="checkpoint/24102021_171800/model-0005-3.3556.pth",
+    #     reload_path="checkpoint/wt_min/model-0005-3.1616.pth",
     # )
     model.infer(
         seq_length=25,
-        reload_path="checkpoint/24102021_205852/model-0001-0.4630.pth",
+        reload_path="checkpoint/wt_min/model-0009-2.1163.pth",
     )

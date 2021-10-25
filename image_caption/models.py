@@ -80,15 +80,16 @@ class TransformerEncoderBlock(nn.Module):
         """
         super().__init__(**kwargs)
         self.attention_1 = nn.MultiheadAttention(
-            input_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
+            output_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )
         self.layernorm_1 = nn.LayerNorm(input_embed_size)
-        self.layernorm_2 = nn.LayerNorm(input_embed_size)
+        self.layernorm_2 = nn.LayerNorm(output_embed_size)
         self.dense_1 = nn.Linear(input_embed_size, output_embed_size, bias=True)
         self.act_1 = nn.ReLU()
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """feature encoder's forward pass"""
+        inputs = self.act_1(self.dense_1(self.layernorm_1(inputs)))
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -97,8 +98,7 @@ class TransformerEncoderBlock(nn.Module):
             attn_mask=None,
         )
         out_1 = self.layernorm_2(inputs + attention_output_1)
-        out_2 = self.act_1(self.dense_1(out_1))
-        return out_2
+        return out_1
 
 
 class PositionalEmbedding(nn.Module):
@@ -205,6 +205,7 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
+        # self.out_act = nn.Sigmoid()
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
@@ -261,7 +262,8 @@ class TransformerDecoderBlock(nn.Module):
 
         ffn_out = self.dropout_2(ffn_out)
         preds = self.out(ffn_out)
-        return preds
+        # preds = self.out_act(self.out(ffn_out))
+        return preds  # , attention_output_2, out_1
 
     @staticmethod
     def get_causal_attention_mask(inputs: torch.Tensor) -> torch.Tensor:
