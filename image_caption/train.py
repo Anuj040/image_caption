@@ -231,7 +231,7 @@ class Caption:
             writer = SummaryWriter(f"log/{now}")
 
             # Initialize validation loss
-            valid_loss = 1e9
+            valid_loss = -1e9
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
         # self.loss_fn = nn.CrossEntropyLoss(reduction="none")
@@ -272,7 +272,7 @@ class Caption:
                 cnn_model, valid_loader, writer, epoch + 1, vocab_size
             )
 
-            if current_val_loss < valid_loss:
+            if current_val_loss > valid_loss:
                 valid_loss = current_val_loss
                 torch.save(
                     {
@@ -364,7 +364,7 @@ class Caption:
             torch.Tensor: loss value
         """
         # First token is often "a", so ignoring it to get better idea for acc.
-        y_true, y_pred, mask = y_true[..., :-1], y_pred[..., :-1], mask[..., -1]
+        y_true, y_pred, mask = y_true[..., 1:], y_pred[..., 1:], mask[..., 1:]
 
         accuracy = torch.eq(y_true, torch.argmax(y_pred, axis=1))
         accuracy = torch.logical_and(mask, accuracy).to(float)
@@ -432,7 +432,7 @@ class Caption:
             vocab_size (int):
 
         Returns:
-            float: validation loss
+            float: validation acc.
         """
         self.encoder.eval()
         self.decoder.eval()
@@ -462,7 +462,7 @@ class Caption:
             "valid_loss", loss_total / loss_count / self.num_captions, step
         )
         writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
-        return loss_total / loss_count / self.num_captions
+        return acc_mean / loss_count / self.num_captions
 
     def infer(
         self,
