@@ -291,7 +291,8 @@ class Caption:
         y_true: torch.Tensor,
         y_pred: torch.Tensor,
         mask: torch.Tensor,
-        loss_weights: torch.Tensor,
+        loss_weights: torch.Tensor = None,
+        mode: str = "train",
     ) -> torch.Tensor:
         """calculates the error between prediction and ground truth
 
@@ -301,6 +302,7 @@ class Caption:
             mask (torch.Tensor):
             loss_weights (torch.Tensor): class weight for each token dependent on their occurence
                         frequency
+            mode (str, optional): Determines the loss fn. to use. Defaults to "train".
 
         Returns:
             torch.Tensor: loss value
@@ -313,11 +315,38 @@ class Caption:
             .transpose(-2, -1)
             .to(dtype=torch.float32)
         )
+        if mode == "valid":
+            # Without weighing different tokens differently
+            loss = one_hot_true * torch.log(y_pred) + (1 - one_hot_true) * torch.log(
+                1 - y_pred
+            )
+            loss = -loss * mask.unsqueeze(1)
+            return torch.sum(loss) / torch.sum(mask)
+        # loss = (
+        #     torch.abs(one_hot_true - y_pred)
+        #     * loss_weights.to(DEVICE)
+        #     * mask.unsqueeze(1)
+        # )
+
+        # Higher weight for later token positions
+        seq_len = y_pred.size(-1)
+        seq_weights = torch.arange(1, seq_len + 1) / seq_len
+        seq_weights = seq_weights.unsqueeze(0).unsqueeze(0)
+        alpha = 0.25
+        gamma = 2.0
         loss = (
-            torch.abs(one_hot_true - y_pred)
-            * loss_weights.to(DEVICE)
-            * mask.unsqueeze(1)
+            loss_weights.to(DEVICE)
+            * one_hot_true
+            * torch.log(y_pred)
+            * (1 - y_pred) ** gamma
+            # + (1 - alpha)
+            + (1 - one_hot_true) * torch.log(1 - y_pred) * (y_pred) ** gamma
         )
+        # loss = (
+        #     -loss * loss_weights.to(DEVICE) * seq_weights.to(DEVICE) * mask.unsqueeze(1)
+        # )
+        # loss = -loss * seq_weights.to(DEVICE) * mask.unsqueeze(1)
+        loss = -loss * mask.unsqueeze(1)
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -334,6 +363,9 @@ class Caption:
         Returns:
             torch.Tensor: loss value
         """
+        # First token is often "a", so ignoring it to get better idea for acc.
+        y_true, y_pred, mask = y_true[..., :-1], y_pred[..., :-1], mask[..., -1]
+
         accuracy = torch.eq(y_true, torch.argmax(y_pred, axis=1))
         accuracy = torch.logical_and(mask, accuracy).to(float)
         return torch.sum(accuracy) / torch.sum(mask.to(float))
@@ -342,7 +374,8 @@ class Caption:
         self,
         img_embed: torch.Tensor,
         batch_seq: torch.Tensor,
-        loss_weights: torch.Tensor,
+        loss_weights: torch.Tensor = None,
+        mode: str = "train",
     ) -> Tuple[torch.Tensor]:
         """
             1. uses image embeddings to predict the caption
@@ -354,6 +387,7 @@ class Caption:
             batch_seq (torch.Tensor): ground truth sequence (captions)
             loss_weights (torch.Tensor): class weight for each token dependent on their occurence
                         frequency
+            mode (str, optional): Determines the loss fn. to use. Defaults to "train".
 
         Returns:
             Tuple[torch.Tensor]: loss/acc values
@@ -371,7 +405,9 @@ class Caption:
 
         batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
-        loss = self.calculate_loss(batch_seq_true, batch_seq_pred, mask, loss_weights)
+        loss = self.calculate_loss(
+            batch_seq_true, batch_seq_pred, mask, loss_weights, mode
+        )
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
 
         del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
@@ -412,11 +448,7 @@ class Caption:
             batch_acc = 0.0
             for caption in captions:
                 loss, acc = self._compute_caption_loss_and_acc(
-                    img_embed,
-                    caption.to(DEVICE),
-                    torch.ones(
-                        [1, vocab_size, 1]
-                    ),  # For validation step all tokens weighed equally
+                    img_embed, caption.to(DEVICE), mode="valid"
                 )
                 batch_loss += loss
                 batch_acc += acc
@@ -496,44 +528,47 @@ class Caption:
 
         self.encoder.eval()
         self.decoder.eval()
-        img_path = "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg"
-        # img_path = "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg"
-        img = Image.open(img_path).convert("RGB")
-        img = img_transform(img).unsqueeze(0)
+        images = [
+            "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg",
+            "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg",
+        ]
+        for img_path in images:
+            img = Image.open(img_path).convert("RGB")
+            img = img_transform(img).unsqueeze(0)
 
-        # Pass the image to the CNN
-        img = cnn_model(img)
-        # Pass the image features to the Transformer encoder
-        encoded_img = self.encoder(img)
+            # Pass the image to the CNN
+            img = cnn_model(img)
+            # Pass the image features to the Transformer encoder
+            encoded_img = self.encoder(img)
 
-        # Generate the caption using the Transformer decoder
-        decoded_caption = "<SOS>"
-        input_seq = [train_dataset.vocab.stoi["<SOS>"]]
-        for i in range(seq_length):
-            pred = self.decoder(
-                torch.Tensor(input_seq).to(dtype=torch.int32).unsqueeze(0),
-                encoded_img,
-                None,
-            )
-            sampled_token_index = int(torch.argmax(pred[0, i, :]))
-            sampled_token = train_dataset.vocab.itos[sampled_token_index]
-            if sampled_token == "<EOS>":
-                break
-            decoded_caption += " " + sampled_token
-            input_seq += [sampled_token_index]
-        decoded_caption = decoded_caption.replace("<SOS>", "") + "."
-        print("Predicted Caption: ", decoded_caption)
+            # Generate the caption using the Transformer decoder
+            decoded_caption = "<SOS>"
+            input_seq = [train_dataset.vocab.stoi["<SOS>"]]
+            for i in range(seq_length):
+                pred = self.decoder(
+                    torch.Tensor(input_seq).to(dtype=torch.int32).unsqueeze(0),
+                    encoded_img,
+                    None,
+                )
+                sampled_token_index = int(torch.argmax(pred[0, i, :]))
+                sampled_token = train_dataset.vocab.itos[sampled_token_index]
+                if sampled_token == "<EOS>":
+                    break
+                decoded_caption += " " + sampled_token
+                input_seq += [sampled_token_index]
+            decoded_caption = decoded_caption.replace("<SOS>", "") + "."
+            print("Predicted Caption: ", decoded_caption)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    # model.train(
-    #     seq_length=25,
-    #     epochs=10,
-    #     batch_size=4,
-    #     reload_path="checkpoint/wt_min/model-0005-3.1616.pth",
-    # )
-    model.infer(
+    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
+    model.train(
         seq_length=25,
-        reload_path="checkpoint/wt_min/model-0009-2.1163.pth",
+        epochs=20,
+        batch_size=4,
+        # reload_path="checkpoint/26102021_135245/model-0008-4.1292.pth",
     )
+    # model.infer(
+    #     seq_length=25,
+    #     reload_path="checkpoint/26102021_170745/model-0020-1.1650.pth",
+    # )

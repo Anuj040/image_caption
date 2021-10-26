@@ -205,7 +205,7 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
-        # self.out_act = nn.Sigmoid()
+        self.out_act = nn.Sigmoid()
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
@@ -261,9 +261,8 @@ class TransformerDecoderBlock(nn.Module):
         ffn_out = self.layernorm_3(ffn_out + out_2)
 
         ffn_out = self.dropout_2(ffn_out)
-        preds = self.out(ffn_out)
-        # preds = self.out_act(self.out(ffn_out))
-        return preds  # , attention_output_2, out_1
+        preds = self.out_act(self.out(ffn_out))
+        return preds
 
     @staticmethod
     def get_causal_attention_mask(inputs: torch.Tensor) -> torch.Tensor:

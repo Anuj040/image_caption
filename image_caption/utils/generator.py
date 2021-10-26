@@ -65,7 +65,7 @@ class Vocabulary:
             word = self.itos[idx]
             freq = frequency[word]
             self.weights[idx] = freq
-        # self.weights = 1 / self.weights ** (0.4)
+        self.weights = 1 / self.weights ** (0.4)
         self.weights = self.weights / min(self.weights)
         # self.weights = (len(sentences) - self.weights) / self.weights
         self.weights = np.expand_dims(np.expand_dims(self.weights, axis=0), axis=-1)
