@@ -11,6 +11,7 @@ from PIL import Image
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import transforms
@@ -205,13 +206,18 @@ class Caption:
             anneal_epochs=2,
             swa_lr=lrate,
         )
+        plt_scheduler = ReduceLROnPlateau(optimizer, "max", patience=2)
+        scheduler_switch_epoch = 15
         if reload_path:
             # Resume from checkpoint
             start_epoch, optim_state, scheduler_state = self.get_current_state(
                 reload_path
             )
             optimizer.load_state_dict(optim_state)
-            swa_scheduler.load_state_dict(scheduler_state)
+            if start_epoch > scheduler_switch_epoch:
+                swa_scheduler.load_state_dict(scheduler_state)
+            else:
+                plt_scheduler.load_state_dict(scheduler_state)
 
             # Logging and checkpoints
             now = os.path.basename(os.path.dirname(reload_path))
@@ -234,13 +240,18 @@ class Caption:
             valid_loss = -1e9
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
-        # self.loss_fn = nn.CrossEntropyLoss(reduction="none")
 
         # Run loop
         for epoch in range(start_epoch, epochs):
 
             self.encoder.train()
             self.decoder.train()
+            scheduler = (
+                swa_scheduler if epoch < scheduler_switch_epoch else plt_scheduler
+            )
+            print(
+                f"========= Runnnig epoch {epoch+1:04d} of {epochs:04d} epochs. ========="
+            )
             for i, (imgs, captions) in enumerate(tqdm(train_loader)):
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
@@ -280,11 +291,14 @@ class Caption:
                         "encoder": self.encoder.state_dict(),
                         "decoder": self.decoder.state_dict(),
                         "optim_state": optimizer.state_dict(),
-                        "scheduler": swa_scheduler.state_dict(),
+                        "scheduler": scheduler.state_dict(),
                     },
                     f"checkpoint/{now}/model-{epoch+1:04d}-{valid_loss:.4f}.pth",
                 )
-            swa_scheduler.step()
+            # Update l_rates
+            scheduler.step() if epoch < scheduler_switch_epoch else scheduler.step(
+                valid_loss
+            )
 
     @staticmethod
     def calculate_loss(
@@ -308,7 +322,6 @@ class Caption:
             torch.Tensor: loss value
         """
         mask = mask.to(dtype=float)
-        # loss = self.loss_fn(y_pred, y_true) * mask
 
         one_hot_true = (
             F.one_hot(y_true, num_classes=y_pred.size(1))
@@ -322,16 +335,11 @@ class Caption:
             )
             loss = -loss * mask.unsqueeze(1)
             return torch.sum(loss) / torch.sum(mask)
-        # loss = (
-        #     torch.abs(one_hot_true - y_pred)
-        #     * loss_weights.to(DEVICE)
-        #     * mask.unsqueeze(1)
-        # )
 
         # Higher weight for later token positions
         seq_len = y_pred.size(-1)
         seq_weights = torch.arange(1, seq_len + 1) / seq_len
-        seq_weights = seq_weights.unsqueeze(0).unsqueeze(0)
+        seq_weights = (seq_weights ** 2.0).unsqueeze(0).unsqueeze(0)
         alpha = 0.25
         gamma = 2.0
         loss = (
@@ -345,8 +353,8 @@ class Caption:
         # loss = (
         #     -loss * loss_weights.to(DEVICE) * seq_weights.to(DEVICE) * mask.unsqueeze(1)
         # )
-        # loss = -loss * seq_weights.to(DEVICE) * mask.unsqueeze(1)
-        loss = -loss * mask.unsqueeze(1)
+        loss = -loss * seq_weights.to(DEVICE) * mask.unsqueeze(1)
+        # loss = -loss * mask.unsqueeze(1)
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -561,14 +569,14 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
+    model = Caption(trainable=False, use_pretrained=True, use_alibi=True)
     model.train(
         seq_length=25,
-        epochs=20,
+        epochs=40,
         batch_size=4,
-        # reload_path="checkpoint/26102021_135245/model-0008-4.1292.pth",
+        reload_path="checkpoint/pre_fl_wt_min(+)_seq**2_wt_alb_test/model-0023-0.4622.pth",
     )
     # model.infer(
     #     seq_length=25,
-    #     reload_path="checkpoint/26102021_170745/model-0020-1.1650.pth",
+    #     reload_path="checkpoint/30102021_010111/model-0012-0.3889.pth",
     # )
