@@ -170,7 +170,9 @@ class Caption:
         )
 
         # Model definitions
-        cnn_model: nn.Module = CNNModel(trainable=self.trainable).to(DEVICE)
+        cnn_model: nn.Module = CNNModel(
+            img_embd_size=self.input_embed_size, trainable=self.trainable
+        ).to(DEVICE)
         self.encoder: nn.Module = TransformerEncoderBlock(
             self.image_embed_size,
             num_heads=self.num_heads,
@@ -182,7 +184,8 @@ class Caption:
             self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
-            3 * self.num_heads,
+            2 * self.num_heads,
+            # self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
 
@@ -193,7 +196,7 @@ class Caption:
             )
 
         # Prepare the optimizer & loss functions
-        lrate = 3e-4
+        lrate = 3e-4 * batch_size / 64
         optimizer = Adam(
             [
                 {"params": self.encoder.parameters(), "lr": 1e-9},
@@ -206,7 +209,7 @@ class Caption:
             anneal_epochs=2,
             swa_lr=lrate,
         )
-        plt_scheduler = ReduceLROnPlateau(optimizer, "max", patience=2)
+        plt_scheduler = ReduceLROnPlateau(optimizer, "max", factor=0.5, patience=5)
         scheduler_switch_epoch = 15
         if reload_path:
             # Resume from checkpoint
@@ -242,6 +245,7 @@ class Caption:
         scaler = GradScaler(enabled=torch.cuda.is_available())
 
         # Run loop
+        cnn_model.eval()
         for epoch in range(start_epoch, epochs):
 
             self.encoder.train()
@@ -336,25 +340,21 @@ class Caption:
             loss = -loss * mask.unsqueeze(1)
             return torch.sum(loss) / torch.sum(mask)
 
-        # Higher weight for later token positions
-        seq_len = y_pred.size(-1)
-        seq_weights = torch.arange(1, seq_len + 1) / seq_len
-        seq_weights = (seq_weights ** 2.0).unsqueeze(0).unsqueeze(0)
         alpha = 0.25
-        gamma = 2.0
+        gamma = 4.0
+        smooth = 0.1
         loss = (
             loss_weights.to(DEVICE)
             * one_hot_true
-            * torch.log(y_pred)
-            * (1 - y_pred) ** gamma
+            * torch.log(y_pred + smooth)
+            * (1 - smooth - y_pred) ** gamma
             # + (1 - alpha)
             + (1 - one_hot_true) * torch.log(1 - y_pred) * (y_pred) ** gamma
         )
         # loss = (
-        #     -loss * loss_weights.to(DEVICE) * seq_weights.to(DEVICE) * mask.unsqueeze(1)
+        #     -loss * loss_weights.to(DEVICE) * mask.unsqueeze(1)
         # )
-        loss = -loss * seq_weights.to(DEVICE) * mask.unsqueeze(1)
-        # loss = -loss * mask.unsqueeze(1)
+        loss = -loss * mask.unsqueeze(1)
         return torch.sum(loss) / torch.sum(mask)
 
     @staticmethod
@@ -406,20 +406,25 @@ class Caption:
         batch_seq_true = batch_seq[:, 1:].long()
 
         # Ignore tokens <UNK>, <PAD>, etc.
-        mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
+        enc_mask = torch.not_equal(batch_seq_inp, self.ignore_indices[0]).to(float)
+        dec_mask = torch.not_equal(batch_seq_true, self.ignore_indices[0]).to(float)
         for token_index in self.ignore_indices[1:]:
+            temp_mask = torch.not_equal(batch_seq_inp, token_index).to(float)
+            enc_mask = torch.minimum(enc_mask, temp_mask)
             temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
-            mask = torch.minimum(mask, temp_mask)
+            dec_mask = torch.minimum(dec_mask, temp_mask)
 
-        batch_seq_pred = self.decoder(batch_seq_inp, encoder_out, mask=mask.to(DEVICE))
+        batch_seq_pred = self.decoder(
+            batch_seq_inp, encoder_out, mask=enc_mask.to(DEVICE)
+        )
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(
-            batch_seq_true, batch_seq_pred, mask, loss_weights, mode
+            batch_seq_true, batch_seq_pred, dec_mask, loss_weights, mode
         )
-        acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, mask)
+        acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, dec_mask)
 
         del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
-        del mask, batch_seq_pred
+        del enc_mask, dec_mask, batch_seq_pred
         return loss, acc
 
     def valid(
@@ -500,14 +505,17 @@ class Caption:
         train_dataset = CaptionDataset(seq_length=seq_length)
         vocab_size = len(train_dataset.vocab)
 
-        if not self.use_pretrained:
-            self.text_embed_size = self.image_embed_size
-        else:
-            _, self.text_embed_size = prepare_embeddings(
-                "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
-            )
+        self.text_embed_size = self.image_embed_size
+        # if not self.use_pretrained:
+        #     self.text_embed_size = self.image_embed_size
+        # else:
+        #     _, self.text_embed_size = prepare_embeddings(
+        #         "datasets/token_embeds", train_dataset.vocab, self.image_embed_size
+        #     )
         # Model definitions
-        cnn_model: nn.Module = CNNModel(trainable=self.trainable).to(DEVICE)
+        cnn_model: nn.Module = CNNModel(
+            img_embd_size=self.input_embed_size, trainable=self.trainable
+        ).to(DEVICE)
         self.encoder: nn.Module = TransformerEncoderBlock(
             self.image_embed_size,
             num_heads=self.num_heads,
@@ -519,7 +527,7 @@ class Caption:
             self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
-            3 * self.num_heads,
+            2 * self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
         print(f"=> loading checkpoint '{reload_path}'")
@@ -533,14 +541,14 @@ class Caption:
 
             loss_regex = r"-(\d*.\d{4})"
             matches = re.search(loss_regex, os.path.basename(reload_path))
-
+        cnn_model.eval()
         self.encoder.eval()
         self.decoder.eval()
         images = [
             "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg",
             "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg",
         ]
-        for img_path in images:
+        for ind, img_path in enumerate(images):
             img = Image.open(img_path).convert("RGB")
             img = img_transform(img).unsqueeze(0)
 
@@ -565,18 +573,18 @@ class Caption:
                 decoded_caption += " " + sampled_token
                 input_seq += [sampled_token_index]
             decoded_caption = decoded_caption.replace("<SOS>", "") + "."
-            print("Predicted Caption: ", decoded_caption)
+            print(f"Predicted Caption {ind}: ", decoded_caption)
 
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=True, use_alibi=True)
-    model.train(
-        seq_length=25,
-        epochs=40,
-        batch_size=4,
-        reload_path="checkpoint/pre_fl_wt_min(+)_seq**2_wt_alb_test/model-0023-0.4622.pth",
-    )
-    # model.infer(
+    # model.train(
     #     seq_length=25,
-    #     reload_path="checkpoint/30102021_010111/model-0012-0.3889.pth",
+    #     epochs=40,
+    #     batch_size=64,
+    #     num_workers=4,
+    #     # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
     # )
+    model.infer(
+        seq_length=25, reload_path="checkpoint/03112021_190501/model-0034-0.4253.pth"
+    )

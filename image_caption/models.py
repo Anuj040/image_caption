@@ -30,21 +30,24 @@ class CNNModel(nn.Module):
 
     """Feature extractor model for image embeddings"""
 
-    def __init__(self, trainable: bool = False) -> None:
+    def __init__(self, img_embd_size, trainable: bool = False) -> None:
         """initialize
 
         Args:
             trainable (bool, optional): [description]. Defaults to False.
         """
         super().__init__()
-        backbone = EfficientNet.from_name("efficientnet-b0", include_top=False)
+        backbone = EfficientNet.from_pretrained("efficientnet-b0")
         backbone.requires_grad = trainable
         # Remove Unnecessary layers
         backbone._bn1 = Identity()
         backbone._avg_pooling = Identity()
+        backbone._fc = Identity()
         backbone._swish = Identity()
         sequence = [backbone]
         self.model = nn.Sequential(*sequence)
+
+        self.img_embd_size = img_embd_size
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Feature extractor's forward function.
@@ -57,7 +60,7 @@ class CNNModel(nn.Module):
 
         # Feature extractor layers
         features = self.model(inputs)
-        features = torch.reshape(features, (features.shape[0], -1, features.shape[1]))
+        features = torch.reshape(features, (features.shape[0], -1, self.img_embd_size))
         return features
 
 
@@ -189,12 +192,20 @@ class TransformerDecoderBlock(nn.Module):
         self.attention_1 = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
         )
+        self.act_drop_1 = nn.Dropout(0.1)
         self.layernorm_1 = nn.LayerNorm(embed_dim)
 
         self.attention_2 = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
         )
+        self.act_drop_2 = nn.Dropout(0.1)
         self.layernorm_2 = nn.LayerNorm(embed_dim)
+
+        # self.attention_3 = nn.MultiheadAttention(
+        #     embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
+        # )
+        # self.act_drop_3 = nn.Dropout(0.1)
+        # self.layernorm_3 = nn.LayerNorm(embed_dim)
 
         self.ffn_layer_1 = nn.Linear(embed_dim, ff_dim, bias=True)
         self.act_1 = nn.ReLU()
@@ -205,12 +216,12 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
-        self.out_act = nn.Sigmoid()
+        self.out_act = nn.Softmax(dim=-1)
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
         inputs = self.embedding(inputs)
-        inputs = self.layernorm(self.ffn_layer(inputs))
+        # inputs = self.layernorm(self.ffn_layer(inputs))
         padding_mask = None
         if mask is not None:
             padding_mask = 1.0 - torch.unsqueeze(mask, -1)
@@ -244,7 +255,7 @@ class TransformerDecoderBlock(nn.Module):
             need_weights=False,
             attn_mask=combined_mask,
         )
-        out_1 = self.layernorm_1(inputs + attention_output_1)
+        out_1 = self.layernorm_1(inputs + self.act_drop_1(attention_output_1))
         attention_output_2, _ = self.attention_2(
             query=out_1,
             key=encoder_outputs,
@@ -252,13 +263,22 @@ class TransformerDecoderBlock(nn.Module):
             need_weights=False,
             attn_mask=None,
         )
-        out_2 = self.layernorm_2(out_1 + attention_output_2)
+        out_2 = self.layernorm_2(out_1 + self.act_drop_2(attention_output_2))
 
-        ffn_out = self.act_1(self.ffn_layer_1(out_2))
+        # attention_output_3, _ = self.attention_3(
+        #     query=out_2,
+        #     key=encoder_outputs,
+        #     value=encoder_outputs,
+        #     need_weights=False,
+        #     attn_mask=None,
+        # )
+        # out_3 = self.layernorm_3(out_2 + self.act_drop_3(attention_output_3))
+        out_3 = out_2
+        ffn_out = self.act_1(self.ffn_layer_1(out_3))
         ffn_out = self.dropout_1(ffn_out)
 
         ffn_out = self.ffn_layer_2(ffn_out)
-        ffn_out = self.layernorm_3(ffn_out + out_2)
+        ffn_out = self.layernorm_3(ffn_out + out_3)
 
         ffn_out = self.dropout_2(ffn_out)
         preds = self.out_act(self.out(ffn_out))
