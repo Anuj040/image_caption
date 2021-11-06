@@ -76,10 +76,11 @@ class Caption:
         image_size = (256, 224)
         train_transform = transforms.Compose(
             [
-                transforms.Resize((356, 356)),
-                transforms.RandomCrop(image_size),
+                # transforms.Resize((356, 356)),
+                # transforms.RandomCrop(image_size),
+                transforms.Resize(image_size),
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+                # transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
                 transforms.ToTensor(),
                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
@@ -184,12 +185,12 @@ class Caption:
             self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
-            2 * self.num_heads,
+            4 * self.num_heads,
             # self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
 
-        if self.use_pretrained:
+        if self.use_pretrained and reload_path is not None:
             # Substitute pretrained embeddings for embedding layer
             self.decoder.embedding.token_embeddings.weight = nn.Parameter(
                 torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
@@ -211,7 +212,7 @@ class Caption:
         )
         plt_scheduler = ReduceLROnPlateau(optimizer, "max", factor=0.5, patience=5)
         scheduler_switch_epoch = 15
-        if reload_path:
+        if reload_path is not None:
             # Resume from checkpoint
             start_epoch, optim_state, scheduler_state = self.get_current_state(
                 reload_path
@@ -344,10 +345,9 @@ class Caption:
         gamma = 4.0
         smooth = 0.1
         loss = (
-            loss_weights.to(DEVICE)
-            * one_hot_true
-            * torch.log(y_pred + smooth)
-            * (1 - smooth - y_pred) ** gamma
+            # loss_weights.to(DEVICE)
+            # *
+            one_hot_true * torch.log(y_pred + smooth) * (1 - y_pred) ** gamma
             # + (1 - alpha)
             + (1 - one_hot_true) * torch.log(1 - y_pred) * (y_pred) ** gamma
         )
@@ -527,7 +527,7 @@ class Caption:
             self.text_embed_size,
             self.image_embed_size,
             self.ff_dim,
-            2 * self.num_heads,
+            4 * self.num_heads,
             self.use_alibi,
         ).to(DEVICE)
         print(f"=> loading checkpoint '{reload_path}'")
@@ -577,14 +577,14 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=True, use_alibi=True)
-    # model.train(
-    #     seq_length=25,
-    #     epochs=40,
-    #     batch_size=64,
-    #     num_workers=4,
-    #     # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
-    # )
-    model.infer(
-        seq_length=25, reload_path="checkpoint/03112021_190501/model-0034-0.4253.pth"
+    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
+    model.train(
+        seq_length=25,
+        epochs=40,
+        batch_size=64,
+        num_workers=4,
+        # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
     )
+    # model.infer(
+    #     seq_length=25, reload_path="checkpoint/06112021_103946/model-0026-0.3912.pth"
+    # )
