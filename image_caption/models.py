@@ -40,7 +40,7 @@ class CNNModel(nn.Module):
         backbone = EfficientNet.from_pretrained("efficientnet-b0")
         backbone.requires_grad = trainable
         # Remove Unnecessary layers
-        # backbone._bn1 = Identity()  #
+        backbone._bn1 = Identity()  #
         backbone._avg_pooling = Identity()
         backbone._fc = Identity()
         backbone._swish = Identity()
@@ -140,7 +140,7 @@ class PositionalEmbedding(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
-        embedded_tokens = self.token_embeddings(inputs)  # * self.embed_scale
+        embedded_tokens = self.token_embeddings(inputs) * self.embed_scale
         if self.use_alibi:
             return embedded_tokens
 

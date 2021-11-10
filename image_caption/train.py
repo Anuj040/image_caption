@@ -197,7 +197,7 @@ class Caption:
             )
 
         # Prepare the optimizer & loss functions
-        lrate = 3e-4 * batch_size / 64
+        lrate = 1e-4 * batch_size / 64
         optimizer = Adam(
             [
                 {"params": self.encoder.parameters(), "lr": 1e-9},
@@ -347,9 +347,9 @@ class Caption:
         loss = (
             # loss_weights.to(DEVICE)
             # *
-            one_hot_true * torch.log(y_pred + smooth) * (1 - y_pred) ** gamma
+            one_hot_true * torch.log(y_pred + smooth)  # * (1 - y_pred) ** gamma
             # + (1 - alpha)
-            + (1 - one_hot_true) * torch.log(1 - y_pred) * (y_pred) ** gamma
+            + (1 - one_hot_true) * torch.log(1 - y_pred)  # * (y_pred) ** gamma
         )
         # loss = (
         #     -loss * loss_weights.to(DEVICE) * mask.unsqueeze(1)
@@ -577,14 +577,15 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=True, use_alibi=False)
-    model.train(
-        seq_length=25,
-        epochs=40,
-        batch_size=64,
-        num_workers=4,
-        # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
-    )
-    # model.infer(
-    #     seq_length=25, reload_path="checkpoint/06112021_103946/model-0026-0.3912.pth"
+    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
+    # model.train(
+    #     seq_length=25,
+    #     epochs=40,
+    #     batch_size=4,
+    #     num_workers=4,
+    #     # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
     # )
+    model.infer(
+        seq_length=25,
+        reload_path="checkpoint_colab/08112021_105041/model-0022-0.4100.pth",
+    )
