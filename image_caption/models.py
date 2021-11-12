@@ -7,28 +7,47 @@ import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
-from image_caption.utils.activation import CustomMultiheadAttention
 from image_caption.utils.model_utils import get_alibi_mask
 
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# pylint: disable = useless-super-delegation
+class Identity(nn.Module):
+    """Custom module for replacing unnecessry layers from pretrained models"""
+
+    def __init__(self):
+        """Initialize"""
+        super().__init__()
+
+    @staticmethod
+    def forward(inputs: torch.Tensor) -> torch.Tensor:
+        "forward pass"
+        return inputs
 
 
 class CNNModel(nn.Module):
 
     """Feature extractor model for image embeddings"""
 
-    def __init__(self, trainable: bool = False) -> None:
+    def __init__(self, img_embd_size, trainable: bool = False) -> None:
         """initialize
 
         Args:
             trainable (bool, optional): [description]. Defaults to False.
         """
         super().__init__()
-        backbone = EfficientNet.from_name("efficientnet-b0", include_top=False)
+        backbone = EfficientNet.from_pretrained("efficientnet-b0")
         backbone.requires_grad = trainable
+        # Remove Unnecessary layers
+        backbone._bn1 = Identity()  #
+        backbone._avg_pooling = Identity()
+        backbone._fc = Identity()
+        backbone._swish = Identity()
         sequence = [backbone]
         self.model = nn.Sequential(*sequence)
+
+        self.img_embd_size = img_embd_size
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Feature extractor's forward function.
@@ -41,7 +60,8 @@ class CNNModel(nn.Module):
 
         # Feature extractor layers
         features = self.model(inputs)
-        features = torch.reshape(features, (features.shape[0], -1, features.shape[1]))
+        features = torch.reshape(features, (features.shape[0], -1, self.img_embd_size))
+        # features = self.norm(features)
         return features
 
 
@@ -64,15 +84,16 @@ class TransformerEncoderBlock(nn.Module):
         """
         super().__init__(**kwargs)
         self.attention_1 = nn.MultiheadAttention(
-            input_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
+            output_embed_size, num_heads, dropout=0.0, bias=True, batch_first=True
         )
         self.layernorm_1 = nn.LayerNorm(input_embed_size)
-        self.layernorm_2 = nn.LayerNorm(input_embed_size)
+        self.layernorm_2 = nn.LayerNorm(output_embed_size)
         self.dense_1 = nn.Linear(input_embed_size, output_embed_size, bias=True)
         self.act_1 = nn.ReLU()
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """feature encoder's forward pass"""
+        inputs = self.act_1(self.dense_1(self.layernorm_1(inputs)))
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -81,8 +102,7 @@ class TransformerEncoderBlock(nn.Module):
             attn_mask=None,
         )
         out_1 = self.layernorm_2(inputs + attention_output_1)
-        out_2 = self.act_1(self.dense_1(out_1))
-        return out_2
+        return out_1
 
 
 class PositionalEmbedding(nn.Module):
@@ -120,8 +140,7 @@ class PositionalEmbedding(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """forward pass for embedding generator"""
-        embedded_tokens = self.token_embeddings(inputs)
-        embedded_tokens = embedded_tokens * self.embed_scale
+        embedded_tokens = self.token_embeddings(inputs) * self.embed_scale
         if self.use_alibi:
             return embedded_tokens
 
@@ -129,9 +148,6 @@ class PositionalEmbedding(nn.Module):
         positions = torch.arange(0, length, step=1).to(DEVICE)
         embedded_positions = self.position_embeddings(positions)
         return embedded_tokens + embedded_positions
-
-    # def compute_mask(self, inputs, mask=None):
-    #     return torch.not_equal(inputs, 0)
 
 
 # pylint: disable = too-many-instance-attributes, too-many-arguments
@@ -176,17 +192,20 @@ class TransformerDecoderBlock(nn.Module):
         self.attention_1 = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
         )
+        self.act_drop_1 = nn.Dropout(0.1)
         self.layernorm_1 = nn.LayerNorm(embed_dim)
 
-        self.attention_2 = CustomMultiheadAttention(
-            embed_dim,
-            num_heads,
-            dropout_p=0.1,
-            bias=True,
-            batch_first=True,
-            softmax_dim=1,
+        self.attention_2 = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
         )
+        self.act_drop_2 = nn.Dropout(0.1)
         self.layernorm_2 = nn.LayerNorm(embed_dim)
+
+        # self.attention_3 = nn.MultiheadAttention(
+        #     embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True
+        # )
+        # self.act_drop_3 = nn.Dropout(0.1)
+        # self.layernorm_3 = nn.LayerNorm(embed_dim)
 
         self.ffn_layer_1 = nn.Linear(embed_dim, ff_dim, bias=True)
         self.act_1 = nn.ReLU()
@@ -197,11 +216,12 @@ class TransformerDecoderBlock(nn.Module):
 
         self.dropout_2 = nn.Dropout(0.5)
         self.out = nn.Linear(embed_dim, vocab_size, bias=True)
+        self.out_act = nn.Softmax(dim=-1)
 
     def forward(self, inputs, encoder_outputs, mask=None):
         """forward pass for the embedding decoder"""
         inputs = self.embedding(inputs)
-        inputs = self.layernorm(self.ffn_layer(inputs))
+        # inputs = self.layernorm(self.ffn_layer(inputs))
         padding_mask = None
         if mask is not None:
             padding_mask = 1.0 - torch.unsqueeze(mask, -1)
@@ -235,24 +255,33 @@ class TransformerDecoderBlock(nn.Module):
             need_weights=False,
             attn_mask=combined_mask,
         )
-        out_1 = self.layernorm_1(inputs + attention_output_1)
+        out_1 = self.layernorm_1(inputs + self.act_drop_1(attention_output_1))
         attention_output_2, _ = self.attention_2(
             query=out_1,
             key=encoder_outputs,
             value=encoder_outputs,
             need_weights=False,
-            attn_mask=padding_mask,
+            attn_mask=None,
         )
-        out_2 = self.layernorm_2(out_1 + attention_output_2)
+        out_2 = self.layernorm_2(out_1 + self.act_drop_2(attention_output_2))
 
-        ffn_out = self.act_1(self.ffn_layer_1(out_2))
+        # attention_output_3, _ = self.attention_3(
+        #     query=out_2,
+        #     key=encoder_outputs,
+        #     value=encoder_outputs,
+        #     need_weights=False,
+        #     attn_mask=None,
+        # )
+        # out_3 = self.layernorm_3(out_2 + self.act_drop_3(attention_output_3))
+        out_3 = out_2
+        ffn_out = self.act_1(self.ffn_layer_1(out_3))
         ffn_out = self.dropout_1(ffn_out)
 
         ffn_out = self.ffn_layer_2(ffn_out)
-        ffn_out = self.layernorm_3(ffn_out + out_2)
+        ffn_out = self.layernorm_3(ffn_out + out_3)
 
         ffn_out = self.dropout_2(ffn_out)
-        preds = self.out(ffn_out)
+        preds = self.out_act(self.out(ffn_out))
         return preds
 
     @staticmethod

@@ -60,6 +60,15 @@ class Vocabulary:
                     idx += 1
                 else:
                     frequency[word] += 1
+        self.weights = np.ones(len(self.itos)) * len(sentences)
+        for idx in range(4, len(self.itos)):
+            word = self.itos[idx]
+            freq = frequency[word]
+            self.weights[idx] = freq
+        self.weights = 1 / self.weights ** (0.4)
+        self.weights = self.weights / min(self.weights)
+        # self.weights = (len(sentences) - self.weights) / self.weights
+        self.weights = np.expand_dims(np.expand_dims(self.weights, axis=0), axis=-1)
 
     def numericalize(self, sentence: str) -> List[int]:
         """returns a vector of integers representing individual word in a phrase
@@ -144,8 +153,9 @@ class CaptionDataset(Dataset):
             torch.Tensor(self.vocab.numericalize(caption)).to(dtype=torch.int32)
             for caption in self.captions[image]
         ]
+        caption_lens = [[len(caption)] for caption in numericalized_captions]
 
-        return img, numericalized_captions
+        return img, numericalized_captions, caption_lens
 
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
@@ -171,14 +181,20 @@ class Collate:
         img = torch.cat(imgs, dim=0)
 
         captions_tensor = []
+        captions_lens = []
         for i in range(self.num_captions):
             targets = [item[1][i] for item in batch]
             targets = pad_sequence(
                 targets, batch_first=True, padding_value=self.pad_value
             )
             captions_tensor.append(targets)
-
-        return img, captions_tensor
+            lengths = [item[2][i] for item in batch]
+            captions_lens.append(lengths)
+        return (
+            img,
+            captions_tensor,
+            torch.Tensor(captions_lens).to(dtype=torch.int32),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
