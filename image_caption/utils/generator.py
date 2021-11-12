@@ -153,8 +153,9 @@ class CaptionDataset(Dataset):
             torch.Tensor(self.vocab.numericalize(caption)).to(dtype=torch.int32)
             for caption in self.captions[image]
         ]
+        caption_lens = [[len(caption)] for caption in numericalized_captions]
 
-        return img, numericalized_captions
+        return img, numericalized_captions, caption_lens
 
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
@@ -180,14 +181,20 @@ class Collate:
         img = torch.cat(imgs, dim=0)
 
         captions_tensor = []
+        captions_lens = []
         for i in range(self.num_captions):
             targets = [item[1][i] for item in batch]
             targets = pad_sequence(
                 targets, batch_first=True, padding_value=self.pad_value
             )
             captions_tensor.append(targets)
-
-        return img, captions_tensor
+            lengths = [item[2][i] for item in batch]
+            captions_lens.append(lengths)
+        return (
+            img,
+            captions_tensor,
+            torch.Tensor(captions_lens).to(dtype=torch.int32),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
