@@ -57,7 +57,9 @@ alpha_c = 1.0
 best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+checkpoint = (
+    None  # "lstm_logs/ACC_67.180_BLEU_0.091.tar"  # path to checkpoint, None if none
+)
 image_embed_size: int = 300
 num_captions = 5
 
@@ -171,6 +173,7 @@ def main():
         )
 
     else:
+        print(f"Loading trained model from {checkpoint}.")
         checkpoint = torch.load(checkpoint)
         start_epoch = checkpoint["epoch"] + 1
         epochs_since_improvement = checkpoint["epochs_since_improvement"]
@@ -375,7 +378,7 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
         for i, (imgs, captions, captionslens) in enumerate(val_loader):
             # Move to GPU, if available
             imgs = imgs.to(DEVICE)
-            allcaps = captions
+            reference_caps = []
             for cap_index in range(num_captions):
                 caps, caplens = captions[cap_index], captionslens[cap_index]
                 caps = caps.to(DEVICE)
@@ -422,40 +425,42 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
                         f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
                         f"Top-5 Accuracy {top5accs.val:.3f} ({top5accs.avg:.3f})\t"
                     )
+                for index, caption in enumerate(caps.tolist()):
+                    if cap_index == 0:
+                        reference_caps.append([caption])
+                    else:
+                        reference_caps[index].append(caption)
+            # Store references (true captions), and hypothesis (prediction) for each image
+            # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
+            # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
 
-                    # Store references (true captions), and hypothesis (prediction) for each image
-                    # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
-                    # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
+            # References # because images were sorted in the decoder
+            reference_caps = [
+                x for _, x in sorted(zip(sort_ind.tolist(), reference_caps))
+            ]
+            for img_caps in reference_caps:
+                # remove <SOS> and pads
+                img_captions = list(
+                    map(
+                        lambda c: [
+                            w
+                            for w in c
+                            if w not in (vocab.stoi["<SOS>"], vocab.stoi["<PAD>"])
+                        ],
+                        img_caps,
+                    )
+                )
+                references.append(img_captions)
 
-                    # References # because images were sorted in the decoder
-                    allcaps = np.array(allcaps)[sort_ind.long()]
-                    for j in range(allcaps.shape[0]):
-                        img_caps = allcaps[j].tolist()
-                        # remove <SOS> and pads
-                        img_captions = list(
-                            map(
-                                lambda c: [
-                                    w
-                                    for w in c
-                                    if w
-                                    not in (vocab.stoi["<SOS>"], vocab.stoi["<PAD>"])
-                                ],
-                                img_caps,
-                            )
-                        )
-                        references.append(img_captions)
+            # Hypotheses
+            _, preds = torch.max(scores_copy, dim=2)
+            preds = preds.tolist()
+            # remove pads
+            temp_preds = [preds[j][: decode_lens[j]] for j, p in enumerate(preds)]
+            preds = temp_preds
+            hypotheses.extend(preds)
 
-                    # Hypotheses
-                    _, preds = torch.max(scores_copy, dim=2)
-                    preds = preds.tolist()
-                    # remove pads
-                    temp_preds = [
-                        preds[j][: decode_lens[j]] for j, p in enumerate(preds)
-                    ]
-                    preds = temp_preds
-                    hypotheses.extend(preds)
-
-                    assert len(references) == len(hypotheses)
+            assert len(references) == len(hypotheses)
 
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypotheses)
