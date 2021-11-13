@@ -47,7 +47,7 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 start_epoch = 0
 epochs = 10  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 4
+batch_size = 32
 num_workers = 4  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
@@ -55,7 +55,7 @@ grad_clip = 5.0  # clip gradients at an absolute value of
 # regularization parameter for 'doubly stochastic attention', as in the paper
 alpha_c = 1.0
 best_bleu4 = 0.0  # BLEU-4 score right now
-print_freq = 10  # print training/validation stats every __ batches
+print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = None  # path to checkpoint, None if none
 image_embed_size: int = 300
@@ -120,7 +120,7 @@ def generators(
     )
     valid_loader = DataLoader(
         dataset=valid_dataset,
-        batch_size=4,
+        batch_size=batch_size,
         num_workers=num_workers,
         shuffle=False,
         pin_memory=True,
@@ -354,7 +354,8 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
     :param criterion: loss layer
     :return: BLEU-4 score
     """
-    decoder.eval()  # eval mode (no dropout or batchnorm)
+    # eval mode (no dropout or batchnorm)
+    decoder.eval()
     if encoder is not None:
         encoder.eval()
 
