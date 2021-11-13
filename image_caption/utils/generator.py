@@ -123,18 +123,21 @@ class CaptionDataset(Dataset):
         captions_mapping, text_data = load_captions_data(
             caption_path, images_path, max_seq_length=seq_length
         )
-        train_data, valid_data = train_val_split(captions_mapping)
-        self.captions = train_data if split == "train" else valid_data
-
-        self.images = list(self.captions.keys())
-
         # strip specific characters from the string
         strip_chars = r"!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
         strip_chars = strip_chars.replace("<", "")
         self.strip_chars = strip_chars.replace(">", "")
-
+        # Build the vocab
         self.vocab = Vocabulary(self.custom_standardization)
         self.vocab.build_vocabulary(text_data)
+
+        # Prepare the split # Returns vectorized captions
+        train_data, valid_data = train_val_split(
+            captions_mapping, self.vocab.numericalize
+        )
+        self.captions = train_data if split == "train" else valid_data
+
+        self.images = list(self.captions.keys())
 
         # # Fixed length allowed for any sequence
         # self.seq_len = seq_length
@@ -149,10 +152,7 @@ class CaptionDataset(Dataset):
         if self.transform:
             img = self.transform(img)
 
-        numericalized_captions = [
-            torch.Tensor(self.vocab.numericalize(caption)).to(dtype=torch.int32)
-            for caption in self.captions[image]
-        ]
+        numericalized_captions = self.captions[image]
         caption_lens = [[len(caption)] for caption in numericalized_captions]
 
         return img, numericalized_captions, caption_lens

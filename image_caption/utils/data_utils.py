@@ -1,10 +1,11 @@
 """utilities for data processing"""
 import os
 import zipfile
-from typing import Tuple
+from typing import Callable, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
 
 np.random.seed(123)
 
@@ -65,12 +66,16 @@ def load_captions_data(
 
 
 def train_val_split(
-    caption_data: dict, train_size: float = 0.8, shuffle: bool = True
+    caption_data: dict,
+    numericalizer: Callable,
+    train_size: float = 0.8,
+    shuffle: bool = True,
 ) -> Tuple[dict]:
     """Split the captioning dataset into train and validation sets.
 
     Args:
         caption_data (dict): Dictionary containing the mapped caption data
+        numericalizer (Callable): vectorize the input sequence
         train_size (float): Fraction of all the full dataset to use as training data
         shuffle (bool): Whether to shuffle the dataset before splitting
 
@@ -89,10 +94,18 @@ def train_val_split(
     train_size = int(len(caption_data) * train_size)
 
     training_data = {
-        img_name: caption_data[img_name] for img_name in all_images[:train_size]
+        img_name: [
+            torch.Tensor(numericalizer(caption)).to(dtype=torch.int32)
+            for caption in caption_data[img_name]
+        ]
+        for img_name in all_images[:train_size]
     }
     validation_data = {
-        img_name: caption_data[img_name] for img_name in all_images[train_size:]
+        img_name: [
+            torch.Tensor(numericalizer(caption)).to(dtype=torch.int32)
+            for caption in caption_data[img_name]
+        ]
+        for img_name in all_images[train_size:]
     }
 
     # 4. Return the splits
