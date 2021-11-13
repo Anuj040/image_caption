@@ -168,7 +168,7 @@ class DecoderWithAttention(nn.Module):
         # initialize some layers with the uniform distribution
         self.init_weights()
 
-    def init_weights(self):
+    def init_weights(self) -> None:
         """
         Initializes some parameters with uniform distribution, for easier convergence.
         """
@@ -183,27 +183,35 @@ class DecoderWithAttention(nn.Module):
         """
         self.embedding.weight = nn.Parameter(embeddings)
 
-    def fine_tune_embeddings(self, fine_tune=True):
+    def fine_tune_embeddings(self, fine_tune: bool = True) -> None:
         """
-        Allow fine-tuning of embedding layer? (Only makes sense to not-allow if using pre-trained embeddings).
-        :param fine_tune: Allow?
-        """
-        for p in self.embedding.parameters():
-            p.requires_grad = fine_tune
+        Allow fine-tuning of embedding layer? (not-allow if using pre-trained embeddings).
 
-    def init_hidden_state(self, encoder_out):
+        Args:
+            fine_tune (bool, optional): Allow? Defaults to True.
         """
-        Creates the initial hidden and cell states for the decoder's LSTM based on the encoded images.
-        :param encoder_out: encoded images, a tensor of dimension (batch_size, num_pixels, encoder_dim)
-        :return: hidden state, cell state
+        for params in self.embedding.parameters():
+            params.requires_grad = fine_tune
+
+    def init_hidden_state(self, encoder_out: torch.Tensor) -> Tuple[torch.Tensor]:
         """
+        Creates the initial hidden and cell states for the decoder's LSTM based on encoded images.
+
+        Args:
+            encoder_out (torch.Tensor): encoded images, a tensor of dimension
+                            (batch_size, num_pixels, encoder_dim)
+
+        Returns:
+            Tuple[torch.Tensor]: hidden state, cell state
+        """
+
         mean_encoder_out = encoder_out.mean(dim=1)
         # (batch_size, decoder_dim)
         hidden = self.init_h(mean_encoder_out)
         cell = self.init_c(mean_encoder_out)
         return hidden, cell
 
-    def forward(self, encoder_out, encoded_captions, caption_lengths):
+    def forward(self, encoder_out: torch.Tensor, encoded_captions, caption_lengths):
         """
         Forward propagation.
         :param encoder_out: encoded images, a tensor of dimension (batch_size, enc_image_size, enc_image_size, encoder_dim)
