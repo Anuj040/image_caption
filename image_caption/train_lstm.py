@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.transforms import transforms
 
+from image_caption.models_lstm import DecoderWithAttention, Encoder
 from image_caption.utils.data_utils import prepare_embeddings
 from image_caption.utils.generator import CaptionDataset, Collate
 from image_caption.utils.model_utils import (
@@ -31,7 +32,6 @@ from image_caption.utils.model_utils import (
     clip_gradient,
     save_checkpoint,
 )
-from models_lstm import DecoderWithAttention, Encoder
 
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -48,7 +48,6 @@ start_epoch = 0
 epochs = 10  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
 batch_size = 32
-num_workers = 4  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
 grad_clip = 5.0  # clip gradients at an absolute value of
@@ -58,7 +57,7 @@ best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 # path to checkpoint, None if none
-checkpoint = None  # "BEST_checkpoint_Flicker8k_Dataset.pth.tar"
+checkpoint = "lstm_logs/ACC_75.991_BLEU_0.05.tar"
 image_embed_size: int = 300
 num_captions = 5
 
@@ -137,7 +136,7 @@ def generators(
     return vocab, train_loader, valid_loader, embedding_matrix
 
 
-def main():
+def main(num_workers: int = 4):
     """
     Training and validation.
     """
@@ -495,7 +494,7 @@ def validate(
     return bleu4
 
 
-def infer() -> None:
+def infer(num_workers: int = 4) -> None:
     """
     Inference
     """
@@ -528,8 +527,8 @@ def infer() -> None:
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ]
     )
-    for ind, img_path in enumerate(images):
-        k = 1  # beam_size
+    for _, img_path in enumerate(images):
+        k = 3  # beam_size
         img = Image.open(img_path).convert("RGB")
         # (1, 3, img_size, img_size)
         img = img_transform(img).unsqueeze(0).to(DEVICE)
@@ -585,13 +584,12 @@ def infer() -> None:
             scores = top_k_scores.expand_as(scores) + scores
 
             # Ist step, all k points will have the same scores
-            # (since same k previous words, h, c)
+            # (since same k previous words, hidden, cell) # (s)
             if step == 1:
-                top_k_scores, top_k_words = scores[0].topk(k, 0, True, True)  # (s)
+                top_k_scores, top_k_words = scores[0].topk(k, 0, True, True)
             else:
                 # Unroll and find top scores, and their unrolled indices # (s)
                 top_k_scores, top_k_words = scores.view(-1).topk(k, 0, True, True)
-
             # Convert unrolled indices to actual indices of scores
             prev_word_inds = top_k_words / vocab_size  # (s)
             next_word_inds = top_k_words % vocab_size  # (s)
@@ -640,5 +638,5 @@ def infer() -> None:
 
 
 if __name__ == "__main__":
-    main()
-    # infer()
+    # main()
+    infer()
