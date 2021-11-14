@@ -7,9 +7,11 @@ from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.optim
 import torch.utils.data
 from nltk.translate.bleu_score import corpus_bleu
+from PIL import Image
 from torch import nn
 from torch.backends import cudnn
 from torch.cuda.amp import GradScaler, autocast
@@ -486,5 +488,150 @@ def validate(
     return bleu4
 
 
+def infer() -> None:
+    """
+    Inference
+    """
+    vocab, _, _, _ = generators(
+        seq_length=25, batch_size=batch_size, num_workers=num_workers
+    )
+    vocab_size = len(vocab)
+    # Initialize / load checkpoint
+    global checkpoint
+
+    print(f"Loading trained model from {checkpoint}.")
+    checkpoint = torch.load(checkpoint)
+    decoder = checkpoint["decoder"]
+    encoder = checkpoint["encoder"]
+
+    # Move to GPU, if available
+    decoder = decoder.to(DEVICE)
+    encoder = encoder.to(DEVICE)
+
+    images = [
+        "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg",
+        "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg",
+    ]
+    # Data augmentation for image data
+    image_size = (224, 224)
+    img_transform = transforms.Compose(
+        [
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ]
+    )
+    for ind, img_path in enumerate(images):
+        k = 1  # beam_size
+        img = Image.open(img_path).convert("RGB")
+        # (1, 3, img_size, img_size)
+        img = img_transform(img).unsqueeze(0).to(DEVICE)
+
+        # Encode # (1, enc_image_size, enc_image_size, encoder_dim)
+        encoder_out = encoder(img)
+        encoder_dim = encoder_out.size(3)
+
+        # Flatten encoding # (1, num_pixels, encoder_dim)
+        encoder_out = encoder_out.view(1, -1, encoder_dim)
+        num_pixels = encoder_out.size(1)
+
+        # We'll treat the problem as having a batch size of k
+        # (k, num_pixels, encoder_dim)
+        encoder_out = encoder_out.expand(k, num_pixels, encoder_dim)
+
+        # Tensor to store top k previous words at each step; now they're just <SOS>. # (k, 1)
+        k_prev_words = torch.LongTensor([[vocab.stoi["<SOS>"]]] * k).to(DEVICE)
+
+        # Tensor to store top k sequences; now they're just <SOS> # (k, 1)
+        seqs = k_prev_words
+
+        # Tensor to store top k sequences' scores; now they're just 0 # (k, 1)
+        top_k_scores = torch.zeros(k, 1).to(DEVICE)
+
+        # Lists to store completed sequences and scores
+        complete_seqs = []
+        complete_seqs_scores = []
+
+        # Start decoding
+        step = 1
+        hidden, cell = decoder.init_hidden_state(encoder_out)
+
+        # s <= k, because sequences are removed from this process once they hit <EOS>
+        while True:
+            # (s, embed_dim)
+            embeddings = decoder.embedding(k_prev_words).squeeze(1)
+            # (s, encoder_dim), (s, num_pixels)
+            awe, _ = decoder.attention(encoder_out, hidden)
+            # gating scalar, (s, encoder_dim)
+            gate = decoder.sigmoid(decoder.f_beta(hidden))
+            awe = gate * awe
+
+            # (s, decoder_dim)
+            hidden, cell = decoder.decode_step(
+                torch.cat([embeddings, awe], dim=1), (hidden, cell)
+            )
+            # (s, vocab_size)
+            scores = decoder.fc(hidden)
+            scores = F.log_softmax(scores, dim=1)
+
+            # Add # (s, vocab_size)
+            scores = top_k_scores.expand_as(scores) + scores
+
+            # Ist step, all k points will have the same scores
+            # (since same k previous words, h, c)
+            if step == 1:
+                top_k_scores, top_k_words = scores[0].topk(k, 0, True, True)  # (s)
+            else:
+                # Unroll and find top scores, and their unrolled indices # (s)
+                top_k_scores, top_k_words = scores.view(-1).topk(k, 0, True, True)
+
+            # Convert unrolled indices to actual indices of scores
+            prev_word_inds = top_k_words / vocab_size  # (s)
+            next_word_inds = top_k_words % vocab_size  # (s)
+
+            # Add new words to sequences
+            # (s, step+1)
+            seqs = torch.cat(
+                [seqs[prev_word_inds.long()], next_word_inds.unsqueeze(1)], dim=1
+            )
+
+            # Which sequences are incomplete (didn't reach <end>)?
+            incomplete_inds = [
+                ind
+                for ind, next_word in enumerate(next_word_inds)
+                if next_word != vocab.stoi["<EOS>"]
+            ]
+            complete_inds = list(set(range(len(next_word_inds))) - set(incomplete_inds))
+
+            # Set aside complete sequences
+            if len(complete_inds) > 0:
+                complete_seqs.extend(seqs[complete_inds].tolist())
+                complete_seqs_scores.extend(top_k_scores[complete_inds])
+            # reduce beam length accordingly
+            k -= len(complete_inds)
+
+            # Proceed with incomplete sequences
+            if k == 0:
+                break
+            seqs = seqs[incomplete_inds]
+            prev_word = prev_word_inds[incomplete_inds].long()
+            hidden = hidden[prev_word]
+            cell = cell[prev_word]
+            encoder_out = encoder_out[prev_word]
+            top_k_scores = top_k_scores[incomplete_inds].unsqueeze(1)
+            k_prev_words = next_word_inds[incomplete_inds].unsqueeze(1)
+
+            # Break if things have been going on too long
+            if step > 50:
+                break
+            step += 1
+
+        i = complete_seqs_scores.index(max(complete_seqs_scores))
+        seq = complete_seqs[i]
+        seq = [vocab.itos[token_index] for token_index in seq[1:-1]]
+        print(seq)
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    infer()
