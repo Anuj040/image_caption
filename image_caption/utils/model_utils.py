@@ -68,6 +68,7 @@ def get_alibi_mask(inputs: torch.Tensor, num_heads: int) -> torch.Tensor:
     return future_mask
 
 
+# pylint: disable = attribute-defined-outside-init
 class AverageMeter:
     """
     Keeps track of most recent, average, sum, and count of a metric.
@@ -76,13 +77,20 @@ class AverageMeter:
     def __init__(self):
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
+        """resets the metric values"""
         self.val = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
 
-    def update(self, val, n=1):
+    def update(self, val: float, n: int = 1) -> None:
+        """updates the metric values
+
+        Args:
+            val (float): latest metric value
+            n (int, optional): metric counter. Defaults to 1.
+        """
         self.val = val
         self.sum += val * n
         self.count += n
@@ -166,4 +174,5 @@ def adjust_learning_rate(optimizer, shrink_factor):
     print("\nDECAYING learning rate.")
     for param_group in optimizer.param_groups:
         param_group["lr"] = param_group["lr"] * shrink_factor
-    print("The new learning rate is %f\n" % (optimizer.param_groups[0]["lr"],))
+    l_rate = optimizer.param_groups[0]["lr"]
+    print(f"New learning rate: {l_rate}\n")

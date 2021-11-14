@@ -3,20 +3,18 @@ import datetime
 import os
 import re
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.optim
 import torch.utils.data
 from nltk.translate.bleu_score import corpus_bleu
-from PIL import Image
 from torch import nn
 from torch.backends import cudnn
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils.rnn import pack_padded_sequence
-from torch.optim import Adam
+from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -58,7 +56,7 @@ best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = (
-    None  # "lstm_logs/ACC_67.180_BLEU_0.091.tar"  # path to checkpoint, None if none
+    "BEST_checkpoint_Flicker8k_Dataset.pth.tar"  # path to checkpoint, None if none
 )
 image_embed_size: int = 300
 num_captions = 5
@@ -157,14 +155,14 @@ def main():
             vocab_size=vocab_size,
             dropout=dropout,
         )
-        decoder_optimizer = torch.optim.Adam(
+        decoder_optimizer = Adam(
             params=filter(lambda p: p.requires_grad, decoder.parameters()),
             lr=decoder_lr,
         )
         encoder = Encoder(encoded_image_size=7)
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = (
-            torch.optim.Adam(
+            Adam(
                 params=filter(lambda p: p.requires_grad, encoder.parameters()),
                 lr=encoder_lr,
             )
@@ -250,51 +248,59 @@ def main():
         )
 
 
+# pylint: disable = too-many-arguments, too-many-locals
 def train(
     train_loader: DataLoader,
     encoder: nn.Module,
     decoder: nn.Module,
-    criterion,
-    encoder_optimizer,
-    decoder_optimizer,
-    epoch,
-):
-    """[summary]
+    criterion: nn.Module,
+    encoder_optimizer: Union[Optimizer, None],
+    decoder_optimizer: Optimizer,
+    epoch: int,
+) -> None:
+    """training epoch executor
 
     Args:
-        train_loader ([type]): DataLoader for training data
-        encoder ([type]): encoder model
-        decoder ([type]): decoder model
-        criterion ([type]): loss layer
-        encoder_optimizer ([type]): optimizer to update encoder's weights (if fine-tuning)
-        decoder_optimizer ([type]): optimizer to update decoder's weights
-        epoch ([type]): epoch number
+        train_loader (DataLoader): DataLoader for training data
+        encoder (nn.Module): encoder model
+        decoder (nn.Module): decoder model
+        criterion (nn.Module): loss layer
+        encoder_optimizer (Union[Optimizer, None]): optimizer for encoder's weights (if fine-tuning)
+        decoder_optimizer (Optimizer): optimizer to update decoder's weights
+        epoch (int): epoch number
     """
-
-    decoder.train()  # train mode (dropout and batchnorm is used)
+    # train mode (dropout and batchnorm is used)
+    decoder.train()
     encoder.train()
 
-    batch_time = AverageMeter()  # forward prop. + back prop. time
-    data_time = AverageMeter()  # data loading time
-    losses = AverageMeter()  # loss (per word decoded)
-    top5accs = AverageMeter()  # top5 accuracy
+    # forward prop. + back prop. time
+    batch_time = AverageMeter()
+    # data loading time
+    data_time = AverageMeter()
+    # loss (per word decoded)
+    losses = AverageMeter()
+    # top5 accuracy
+    top5accs = AverageMeter()
 
     start = time.time()
 
     # Batches
     for i, (imgs, captions, captionslens) in enumerate(train_loader):
-        data_time.update(time.time() - start)
 
+        data_time.update(time.time() - start)
         # Move to GPU, if available
         imgs = imgs.to(DEVICE)
+        if encoder_optimizer is None:
+            imgs_encode = encoder(imgs)
         for cap_index in range(num_captions):
             caps, caplens = captions[cap_index], captionslens[cap_index]
             caps = caps.to(DEVICE)
             caplens = caplens.to(DEVICE)
 
             # Forward prop.
-            imgs_encode = encoder(imgs)
-            scores, caps_sorted, decode_lens, alphas, sort_ind = decoder(
+            if encoder_optimizer is not None:
+                imgs_encode = encoder(imgs)
+            scores, caps_sorted, decode_lens, alphas, _ = decoder(
                 imgs_encode, caps, caplens
             )
 
@@ -340,7 +346,7 @@ def train(
             # Print status
             if (i * num_captions + cap_index) % print_freq == 0:
                 print(
-                    f"Epoch: [{epoch}][{i * num_captions + cap_index}/{len(train_loader)}]\t"
+                    f"Epoch: [{epoch}][{i}/{len(train_loader)}]\t"
                     f"Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
                     f"Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})\t"
                     f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
@@ -348,14 +354,20 @@ def train(
                 )
 
 
-def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, criterion):
+def validate(
+    val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, criterion: nn.Module
+) -> float:
     """
     Performs one epoch's validation.
-    :param val_loader: DataLoader for validation data.
-    :param encoder: encoder model
-    :param decoder: decoder model
-    :param criterion: loss layer
-    :return: BLEU-4 score
+
+    Args:
+        val_loader (DataLoader): DataLoader for validation data.
+        encoder (nn.Module): encoder model
+        decoder (nn.Module): decoder model
+        criterion (nn.Module): loss layer
+
+    Returns:
+        float: BLEU-4 score
     """
     # eval mode (no dropout or batchnorm)
     decoder.eval()
@@ -367,9 +379,10 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
     top5accs = AverageMeter()
 
     start = time.time()
-
-    references = []  # references (true captions) for calculating BLEU-4 score
-    hypotheses = []  # hypotheses (predictions)
+    # references (true captions) for calculating BLEU-4 score
+    references = []
+    # hypotheses (predictions)
+    hypotheses = []
 
     # explicitly disable gradient calculation to avoid CUDA memory error
     # solves the issue #57
@@ -378,15 +391,15 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
         for i, (imgs, captions, captionslens) in enumerate(val_loader):
             # Move to GPU, if available
             imgs = imgs.to(DEVICE)
+            # Forward prop.
+            if encoder is not None:
+                imgs_encode = encoder(imgs)
             reference_caps = []
             for cap_index in range(num_captions):
                 caps, caplens = captions[cap_index], captionslens[cap_index]
                 caps = caps.to(DEVICE)
                 caplens = caplens.to(DEVICE)
 
-                # Forward prop.
-                if encoder is not None:
-                    imgs_encode = encoder(imgs)
                 scores, caps_sorted, decode_lens, alphas, sort_ind = decoder(
                     imgs_encode, caps, caplens
                 )
@@ -420,7 +433,7 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
 
                 if (i * num_captions + cap_index) % print_freq == 0:
                     print(
-                        f"Validation: [{i * num_captions + cap_index}/{len(val_loader)}]\t"
+                        f"Validation: [{i}/{len(val_loader)}]\t"
                         f"Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
                         f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
                         f"Top-5 Accuracy {top5accs.val:.3f} ({top5accs.avg:.3f})\t"
@@ -431,8 +444,9 @@ def validate(val_loader: DataLoader, encoder: nn.Module, decoder: nn.Module, cri
                     else:
                         reference_caps[index].append(caption)
             # Store references (true captions), and hypothesis (prediction) for each image
-            # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
-            # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
+            # for n images, with n hypotheses, and references a, b, c... for each image
+            # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...]
+            # hypotheses = [hyp1, hyp2, ...]
 
             # References # because images were sorted in the decoder
             reference_caps = [
