@@ -57,7 +57,7 @@ best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 # path to checkpoint, None if none
-checkpoint = "lstm_logs/ACC_75.991_BLEU_0.05.tar"
+checkpoint = "BEST_checkpoint_Flicker8k_Dataset.pth.tar"
 image_embed_size: int = 300
 num_captions = 5
 
@@ -172,7 +172,7 @@ def main(num_workers: int = 4):
 
     else:
         print(f"Loading trained model from {checkpoint}.")
-        checkpoint = torch.load(checkpoint)
+        checkpoint = torch.load(checkpoint, map_location=torch.device(DEVICE))
         start_epoch = checkpoint["epoch"] + 1
         epochs_since_improvement = checkpoint["epochs_since_improvement"]
         best_bleu4 = checkpoint["bleu-4"]
@@ -506,7 +506,7 @@ def infer(num_workers: int = 4) -> None:
     global checkpoint
 
     print(f"Loading trained model from {checkpoint}.")
-    checkpoint = torch.load(checkpoint)
+    checkpoint = torch.load(checkpoint, map_location=torch.device(DEVICE))
     decoder = checkpoint["decoder"]
     encoder = checkpoint["encoder"]
 
