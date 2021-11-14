@@ -4,6 +4,7 @@ datasets
 .vscode
 checkpoint*
 log*
+lstm_logs
 
 # poetry files
 poetry.lock
