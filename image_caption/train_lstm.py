@@ -57,9 +57,8 @@ alpha_c = 1.0
 best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = (
-    "BEST_checkpoint_Flicker8k_Dataset.pth.tar"  # path to checkpoint, None if none
-)
+# path to checkpoint, None if none
+checkpoint = None  # "BEST_checkpoint_Flicker8k_Dataset.pth.tar"
 image_embed_size: int = 300
 num_captions = 5
 
@@ -284,8 +283,8 @@ def train(
     # top5 accuracy
     top5accs = AverageMeter()
 
+    scaler = GradScaler(enabled=torch.cuda.is_available())
     start = time.time()
-
     # Batches
     for i, (imgs, captions, captionslens) in enumerate(train_loader):
 
@@ -302,29 +301,37 @@ def train(
             # Forward prop.
             if encoder_optimizer is not None:
                 imgs_encode = encoder(imgs)
-            scores, caps_sorted, decode_lens, alphas, _ = decoder(
-                imgs_encode, caps, caplens
-            )
+            with autocast(enabled=torch.cuda.is_available()):
+                scores, caps_sorted, decode_lens, alphas, _ = decoder(
+                    imgs_encode, caps, caplens
+                )
 
-            # We decode starting with <SOS>, targets are all words after <SOS> -> <EOS>
-            targets = caps_sorted[:, 1:].long()
+                # We decode starting with <SOS>, targets are all words after <SOS> -> <EOS>
+                targets = caps_sorted[:, 1:].long()
 
-            # Remove timesteps that we didn't decode at, or are pads
-            # pack_padded_sequence is an easy trick to do this
-            scores = pack_padded_sequence(scores, decode_lens, batch_first=True).data
-            targets = pack_padded_sequence(targets, decode_lens, batch_first=True).data
+                # Remove timesteps that we didn't decode at, or are pads
+                # pack_padded_sequence is an easy trick to do this
+                scores = pack_padded_sequence(
+                    scores, decode_lens, batch_first=True
+                ).data
+                targets = pack_padded_sequence(
+                    targets, decode_lens, batch_first=True
+                ).data
 
-            # Calculate loss
-            loss = criterion(scores, targets)
+                # Calculate loss
+                loss = criterion(scores, targets)
 
-            # Add doubly stochastic attention regularization
-            loss += alpha_c * ((1.0 - alphas.sum(dim=1)) ** 2).mean()
+                # Add doubly stochastic attention regularization
+                loss += alpha_c * ((1.0 - alphas.sum(dim=1)) ** 2).mean()
+            scaler.scale(loss).backward(retain_graph=True)
+            scaler.step(decoder_optimizer)
+            scaler.update()
 
             # Back prop.
             decoder_optimizer.zero_grad()
             if encoder_optimizer is not None:
+                scaler.step(encoder_optimizer)
                 encoder_optimizer.zero_grad()
-            loss.backward()
 
             # Clip gradients
             if grad_clip is not None:
@@ -633,5 +640,5 @@ def infer() -> None:
 
 
 if __name__ == "__main__":
-    # main()
-    infer()
+    main()
+    # infer()
