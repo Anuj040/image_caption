@@ -257,7 +257,7 @@ class Caption:
             print(
                 f"========= Runnnig epoch {epoch+1:04d} of {epochs:04d} epochs. ========="
             )
-            for i, (imgs, captions) in enumerate(tqdm(train_loader)):
+            for i, (imgs, captions, _) in enumerate(tqdm(train_loader)):
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
                 img_embed = cnn_model(imgs)
@@ -452,7 +452,7 @@ class Caption:
         loss_total = 0
         loss_count = 0
         acc_mean = 0
-        for (imgs, captions) in loader:
+        for (imgs, captions, _) in loader:
             batch_size = imgs.size(0)
             imgs = imgs.to(DEVICE)
 
