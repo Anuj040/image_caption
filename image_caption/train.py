@@ -467,9 +467,9 @@ class Caption:
                 batch_acc += acc
             del img_embed, imgs, captions
 
-        loss_total += batch_loss.cpu().item() * batch_size
-        acc_mean += batch_acc.cpu().item() * batch_size
-        loss_count += batch_size
+            loss_total += batch_loss.cpu().item() * batch_size
+            acc_mean += batch_acc.cpu().item() * batch_size
+            loss_count += batch_size
 
         writer.add_scalar(
             "valid_loss", loss_total / loss_count / self.num_captions, step
@@ -477,34 +477,32 @@ class Caption:
         writer.add_scalar("valid_acc", acc_mean / loss_count / self.num_captions, step)
         return acc_mean / loss_count / self.num_captions
 
-    def infer(
+    def beam_infer(
         self,
         seq_length: int = 25,
-        reload_path: Optional[str] = None,
+        beam_size: int = 1,
+        reload_path: str = None,
     ) -> None:
         """preparation of model definitions and execute train/valid step
 
         Args:
             seq_length (int, optional): Fixed length allowed for any sequence. Defaults to 25.
-            epochs (int, optional): Total epochs to run. Defaults to 10.
-            batch_size (int, optional): Defaults to 64.
-            num_workers (int, optional): Defaults to 8.
-            reload_path (Optional[str], optional): Checkpoint path, if provided, model
-                    train will resume from the checkpoint. Defaults to None.
+            beam_size (int, optional): Top-k predictions to chose. Defaults to 1.
+            reload_path (Optional[str], optional): Checkpoint path
         """
         # Data augmentation for image data
         image_size = (224, 224)
         img_transform = transforms.Compose(
             [
-                # transforms.Resize(image_size),
+                transforms.Resize(image_size),
                 transforms.ToTensor(),
                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
         )
         # Prepare the vocab
         train_dataset = CaptionDataset(seq_length=seq_length)
-        vocab_size = len(train_dataset.vocab)
-
+        vocab = train_dataset.vocab
+        vocab_size = len(vocab)
         self.text_embed_size = self.image_embed_size
         # if not self.use_pretrained:
         #     self.text_embed_size = self.image_embed_size
@@ -535,12 +533,6 @@ class Caption:
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.decoder.load_state_dict(checkpoint["decoder"])
 
-        if reload_path:
-            # Logging and checkpoints
-            now = os.path.basename(os.path.dirname(reload_path))
-
-            loss_regex = r"-(\d*.\d{4})"
-            matches = re.search(loss_regex, os.path.basename(reload_path))
         cnn_model.eval()
         self.encoder.eval()
         self.decoder.eval()
@@ -557,35 +549,86 @@ class Caption:
             # Pass the image features to the Transformer encoder
             encoded_img = self.encoder(img)
 
+            # beam_search_index
+            k = beam_size
+            encoded_img = encoded_img.tile([k, 1, 1])
+
+            input_seq = torch.Tensor(
+                [[train_dataset.vocab.stoi["<SOS>"]] for _ in range(k)]
+            )
+            # Tensor to store top k sequences' scores; now they're just 0 # (k, 1)
+            top_k_scores = torch.zeros(k, 1).to(DEVICE)
+            step = 1
+            # Lists to store completed sequences and scores
+            complete_seqs = []
+            complete_seqs_scores = []
             # Generate the caption using the Transformer decoder
-            decoded_caption = "<SOS>"
-            input_seq = [train_dataset.vocab.stoi["<SOS>"]]
-            for i in range(seq_length):
+            while True:
                 pred = self.decoder(
-                    torch.Tensor(input_seq).to(dtype=torch.int32).unsqueeze(0),
+                    input_seq.to(dtype=torch.int32),
                     encoded_img,
                     None,
                 )
-                sampled_token_index = int(torch.argmax(pred[0, i, :]))
-                sampled_token = train_dataset.vocab.itos[sampled_token_index]
-                if sampled_token == "<EOS>":
+                # Add # (s, vocab_size)
+                pred = top_k_scores.expand_as(pred[:, -1]) + pred[:, -1]
+                if step == 1:
+                    top_k_scores, top_k_words = pred[0].topk(k, -1, True, True)
+                else:
+                    pred = pred.reshape(-1)
+                    top_k_scores, top_k_words = pred.topk(k, -1, True, True)
+                # Convert unrolled indices to actual indices of scores
+                prev_word_inds = top_k_words / vocab_size  # (s)
+                next_word_inds = top_k_words % vocab_size
+                # Add new words to sequences
+                input_seq = torch.cat(
+                    [input_seq[prev_word_inds.long()], next_word_inds.unsqueeze(1)],
+                    dim=1,
+                )
+                # Check for incomplete (didn't reach <EOS>) sequences
+                incomplete_inds = [
+                    ind
+                    for ind, next_word in enumerate(next_word_inds)
+                    if next_word != vocab.stoi["<EOS>"]
+                ]
+                complete_inds = list(set(range(k)) - set(incomplete_inds))
+                # Set aside complete sequences
+                if len(complete_inds) > 0:
+                    complete_seqs.extend(input_seq[complete_inds].tolist())
+                    complete_seqs_scores.extend(top_k_scores[complete_inds])
+
+                # reduce beam length accordingly
+                k -= len(complete_inds)
+                # Proceed with incomplete sequences
+                if k == 0:
                     break
-                decoded_caption += " " + sampled_token
-                input_seq += [sampled_token_index]
-            decoded_caption = decoded_caption.replace("<SOS>", "") + "."
-            print(f"Predicted Caption {ind}: ", decoded_caption)
+                input_seq = input_seq[incomplete_inds]
+                encoded_img = encoded_img[incomplete_inds]
+                top_k_scores = top_k_scores[incomplete_inds].unsqueeze(1)
+                # Break if things have been going on too long
+                if step >= seq_length:
+                    break
+                step += 1
+            try:
+                i = complete_seqs_scores.index(max(complete_seqs_scores))
+                seq = complete_seqs[i]
+            except:
+                seq = input_seq[0].tolist()
+            seq = " ".join(vocab.itos[token_index] for token_index in seq[1:-1]) + "."
+            print(f"Predicted Caption {ind}: ", seq)
 
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
+    MODEL_PATH = "transform_log/checkpoint_colab/scale/model-0019-0.3893.pth"
     # model.train(
     #     seq_length=25,
     #     epochs=40,
     #     batch_size=4,
     #     num_workers=4,
-    #     # reload_path="checkpoint/03112021_145726/model-0020-0.3304.pth",
+    #     reload_path=MODEL_PATH,
     # )
-    model.infer(
+    model.beam_infer(
         seq_length=25,
-        reload_path="checkpoint_colab/08112021_105041/model-0022-0.4100.pth",
+        beam_size=1,
+        reload_path=MODEL_PATH,
     )
