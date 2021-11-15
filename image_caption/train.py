@@ -452,24 +452,25 @@ class Caption:
         loss_total = 0
         loss_count = 0
         acc_mean = 0
-        for (imgs, captions, _) in loader:
-            batch_size = imgs.size(0)
-            imgs = imgs.to(DEVICE)
+        with torch.no_grad():
+            for (imgs, captions, _) in loader:
+                batch_size = imgs.size(0)
+                imgs = imgs.to(DEVICE)
 
-            img_embed = cnn_model(imgs)
-            batch_loss = 0.0
-            batch_acc = 0.0
-            for caption in captions:
-                loss, acc = self._compute_caption_loss_and_acc(
-                    img_embed, caption.to(DEVICE), mode="valid"
-                )
-                batch_loss += loss
-                batch_acc += acc
-            del img_embed, imgs, captions
+                img_embed = cnn_model(imgs)
+                batch_loss = 0.0
+                batch_acc = 0.0
+                for caption in captions:
+                    loss, acc = self._compute_caption_loss_and_acc(
+                        img_embed, caption.to(DEVICE), mode="valid"
+                    )
+                    batch_loss += loss
+                    batch_acc += acc
+                del img_embed, imgs, captions
 
-            loss_total += batch_loss.cpu().item() * batch_size
-            acc_mean += batch_acc.cpu().item() * batch_size
-            loss_count += batch_size
+                loss_total += batch_loss.cpu().item() * batch_size
+                acc_mean += batch_acc.cpu().item() * batch_size
+                loss_count += batch_size
 
         writer.add_scalar(
             "valid_loss", loss_total / loss_count / self.num_captions, step
