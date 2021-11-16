@@ -57,7 +57,7 @@ best_bleu4 = 0.0  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 # path to checkpoint, None if none
-checkpoint = "BEST_checkpoint_Flicker8k_Dataset.pth.tar"
+checkpoint = None  # "ACC_85.295_BLEU_.0489.tar"
 image_embed_size: int = 300
 num_captions = 5
 
@@ -154,6 +154,9 @@ def main(num_workers: int = 4):
             decoder_dim=decoder_dim,
             vocab_size=vocab_size,
             dropout=dropout,
+        )
+        decoder.embedding.weight = nn.Parameter(
+            torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
         )
         decoder_optimizer = Adam(
             params=filter(lambda p: p.requires_grad, decoder.parameters()),
@@ -527,7 +530,7 @@ def infer(num_workers: int = 4) -> None:
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ]
     )
-    for _, img_path in enumerate(images):
+    for ind, img_path in enumerate(images):
         k = 3  # beam_size
         img = Image.open(img_path).convert("RGB")
         # (1, 3, img_size, img_size)
@@ -600,7 +603,7 @@ def infer(num_workers: int = 4) -> None:
                 [seqs[prev_word_inds.long()], next_word_inds.unsqueeze(1)], dim=1
             )
 
-            # Which sequences are incomplete (didn't reach <end>)?
+            # Which sequences are incomplete (didn't reach <EOS>)?
             incomplete_inds = [
                 ind
                 for ind, next_word in enumerate(next_word_inds)
@@ -633,10 +636,10 @@ def infer(num_workers: int = 4) -> None:
 
         i = complete_seqs_scores.index(max(complete_seqs_scores))
         seq = complete_seqs[i]
-        seq = [vocab.itos[token_index] for token_index in seq[1:-1]]
-        print(seq)
+        seq = " ".join(vocab.itos[token_index] for token_index in seq[1:-1]) + "."
+        print(f"Predicted Caption {ind}: ", seq)
 
 
 if __name__ == "__main__":
-    # main()
-    infer()
+    main()
+    # infer()
