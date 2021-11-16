@@ -65,6 +65,64 @@ class CNNModel(nn.Module):
         return features
 
 
+def point_wise_feed_forward_network(d_model: int, dff: int) -> nn.Module:
+    """feed forward layer
+
+    Args:
+        d_model (int): embd dimension
+        dff (int): sparse dimension
+
+    Returns:
+        nn.Module
+    """
+    return nn.Sequential(
+        *[  # (batch_size, seq_len, dff)
+            nn.Linear(d_model, dff),
+            nn.ReLU(),
+            # (batch_size, seq_len, d_model)
+            nn.Linear(dff, d_model),
+        ]
+    )
+
+
+class EncoderLayer(nn.Module):
+    """Basic encoder layer"""
+
+    def __init__(
+        self, d_model: int = 512, num_heads: int = 1, dff: int = 2048, rate: float = 0.1
+    ) -> None:
+        """Initialization"""
+        super().__init__()
+
+        self.mha = nn.MultiheadAttention(
+            d_model, num_heads, dropout=rate, bias=True, batch_first=True
+        )
+        self.ffn = point_wise_feed_forward_network(d_model, dff)
+
+        self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6)
+        self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
+
+        self.dropout2 = nn.Dropout(rate)
+
+    def forward(self, inputs: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        """forward pass for the encoder layer"""
+
+        # (batch_size, input_seq_len, d_model)
+        attn_output, _ = self.mha(
+            query=inputs, key=inputs, value=inputs, need_weights=False, attn_mask=mask
+        )
+        # (batch_size, input_seq_len, d_model)
+        out1 = self.layernorm1(inputs + attn_output)
+
+        # (batch_size, input_seq_len, d_model)
+        ffn_output = self.ffn(out1)
+        ffn_output = self.dropout2(ffn_output)
+        # (batch_size, input_seq_len, d_model)
+        out2 = self.layernorm2(out1 + ffn_output)
+
+        return out2
+
+
 class TransformerEncoderBlock(nn.Module):
     """encoder model for transforming image embeddings to one relatable to sequence embeddings"""
 
@@ -309,18 +367,19 @@ if __name__ == "__main__":  # pragma: no cover
     # Per-layer units in the feed-forward network
     FF_DIM = 512
 
-    cnn = CNNModel()
-    encoder = TransformerEncoderBlock(EMBED_DIM, 1)
+    # cnn = CNNModel()
+    # encoder = TransformerEncoderBlock(EMBED_DIM, 1)
     a = torch.rand((3, 3, 299, 299))
 
-    b = cnn(a)
-    c = encoder(b)
-    print(c.detach().numpy().shape)
+    # b = cnn(a)
+    # c = encoder(b)
+    # print(c.detach().numpy().shape)
 
-    decoder = TransformerDecoderBlock(
-        VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, EMBED_DIM, FF_DIM, 2
-    )
-    a = torch.randint(0, 10, (3, SEQ_LENGTH))
-    MASK = (a > 4 - 1).to(float)
-    d = decoder(a, c, mask=MASK)
-    print(d.detach().numpy().shape)
+    # decoder = TransformerDecoderBlock(
+    #     VOCAB_SIZE, SEQ_LENGTH, EMBED_DIM, EMBED_DIM, FF_DIM, 2
+    # )
+    # a = torch.randint(0, 10, (3, SEQ_LENGTH))
+    # MASK = (a > 4 - 1).to(float)
+    # d = decoder(a, c, mask=MASK)
+    # print(d.detach().numpy().shape)
+    enl = EncoderLayer()
