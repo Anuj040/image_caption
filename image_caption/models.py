@@ -236,11 +236,128 @@ class Encoder(nn.Module):
         # Image embeddings
         # (batch_size, pixels, d_model)
         embeds = self.dropout(inputs)
+        attn_weights = {}
+        for i in range(self.num_layers):
+            embeds, block = self.enc_layers[i](embeds, mask=None)
+            attn_weights[f"encoder_layer{i+1}_block"] = block
+        # (batch_size, encoded_pixels, d_model)
+        return embeds, attn_weights
+
+
+class Decoder(nn.Module):
+    """Decoder block"""
+
+    def __init__(
+        self,
+        num_layers: int,
+        d_model: int = 512,
+        num_heads: int = 1,
+        dff: int = 2048,
+        vocab_size: int = 10000,
+        max_pos_encode: int = 50,
+        rate: float = 0.1,
+    ):
+        """Initialization"""
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_layers = num_layers
+
+        self.embedding = PositionalEmbedding(
+            embed_dim=d_model,
+            sequence_length=max_pos_encode,
+            vocab_size=vocab_size,
+            use_alibi=False,
+        )
+
+        self.dec_layers = [
+            DecoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)
+        ]
+
+        self.dropout = nn.Dropout(rate)
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        enc_output: torch.Tensor,
+        look_ahead_mask: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """forward pass"""
+
+        attention_weights = {}
+        # adding embedding and position encoding.
+        # (batch_size, input_seq_len, d_model)
+        embeds = self.embedding(inputs)
+        embeds = self.dropout(embeds)
 
         for i in range(self.num_layers):
-            embeds, _ = self.enc_layers[i](embeds, mask=None)
-        # (batch_size, encoded_pixels, d_model)
-        return embeds
+            embeds, block1, block2 = self.dec_layers[i](
+                embeds, enc_output, look_ahead_mask
+            )
+        attention_weights[f"decoder_layer{i+1}_block1"] = block1
+        attention_weights[f"decoder_layer{i+1}_block2"] = block2
+
+        # (batch_size, input_seq_len, d_model)
+        return embeds, attention_weights
+
+
+class Transformer(nn.Module):
+    """Transformer"""
+
+    def __init__(
+        self,
+        num_layers: int = 1,
+        d_model: int = 512,
+        num_heads: int = 1,
+        dff: int = 2048,
+        vocab_size: int = 10000,
+        max_pos_encode: int = 50,
+        rate: float = 0.1,
+    ):
+        """initialization"""
+        super().__init__()
+        self.num_heads = num_heads
+        self.encoder = Encoder(num_layers, d_model, num_heads, dff, rate)
+
+        self.decoder = Decoder(
+            num_layers, d_model, num_heads, dff, vocab_size, max_pos_encode, rate
+        )
+
+        self.final_layer = nn.Softmax(dim=-1)
+
+    def forward(
+        self, imgs: torch.Tensor, tar: torch.Tensor, mask: torch.Tensor = None
+    ) -> torch.Tensor:
+        """forward"""
+        if mask is not None:
+            causal_mask = self.get_causal_attention_mask(tar)
+            combined_mask = torch.unsqueeze(mask, 1)
+            combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
+            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
+        else:
+            combined_mask = 1.0 - self.get_causal_attention_mask(tar)
+            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
+
+        # (batch_size, #pixels, d_model)
+        enc_output, encoder_attns = self.encoder(imgs)
+
+        # dec_output.shape == (batch_size, tar_seq_len, d_model)
+        dec_output, decoder_attns = self.decoder(tar, enc_output, combined_mask)
+        # (batch_size, seq_len, vocab_size)
+        final_output = self.final_layer(dec_output)
+
+        return final_output, encoder_attns, decoder_attns
+
+    @staticmethod
+    def get_causal_attention_mask(inputs: torch.Tensor) -> torch.Tensor:
+        """prepares a mask such that attention is paid only to the ancestors"""
+        input_shape = inputs.size()
+        batch_size, sequence_length = input_shape[0], input_shape[1]
+        i = torch.unsqueeze(torch.arange(0, sequence_length), -1)
+        j = torch.arange(0, sequence_length)
+        mask = (i >= j).to(dtype=float)
+        mask = torch.reshape(mask, (1, input_shape[1], input_shape[1]))
+        return torch.tile(mask, [batch_size, 1, 1]).to(DEVICE)
 
 
 class TransformerEncoderBlock(nn.Module):
@@ -425,6 +542,7 @@ class TransformerDecoderBlock(nn.Module):
                 combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
                     bool
                 )
+
         attention_output_1, _ = self.attention_1(
             query=inputs,
             key=inputs,
@@ -488,7 +606,7 @@ if __name__ == "__main__":  # pragma: no cover
 
     # cnn = CNNModel()
     # encoder = TransformerEncoderBlock(EMBED_DIM, 1)
-    a = torch.rand((3, 3, 299, 299))
+    a = torch.rand((3, 3, 512))
 
     # b = cnn(a)
     # c = encoder(b)
@@ -501,4 +619,6 @@ if __name__ == "__main__":  # pragma: no cover
     # MASK = (a > 4 - 1).to(float)
     # d = decoder(a, c, mask=MASK)
     # print(d.detach().numpy().shape)
-    dec = Encoder(num_layers=1)
+    b = torch.randint(0, 10, (3, SEQ_LENGTH))
+    dec = Decoder(num_layers=1)
+    print(dec(b, a))
