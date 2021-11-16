@@ -3,6 +3,8 @@ model architecures
 https://keras.io/examples/vision/image_captioning/#building-the-model
 """
 
+from typing import Tuple
+
 import torch
 from efficientnet_pytorch import EfficientNet
 from torch import nn
@@ -12,7 +14,7 @@ from image_caption.utils.model_utils import get_alibi_mask
 # check if cuda available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# pylint: disable = useless-super-delegation
+# pylint: disable = useless-super-delegation, too-many-instance-attributes, too-many-arguments
 class Identity(nn.Module):
     """Custom module for replacing unnecessry layers from pretrained models"""
 
@@ -102,15 +104,23 @@ class EncoderLayer(nn.Module):
         self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6)
         self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
 
+        self.dropout1 = nn.Dropout(rate)
         self.dropout2 = nn.Dropout(rate)
 
-    def forward(self, inputs: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self, inputs: torch.Tensor, mask: torch.Tensor = None
+    ) -> Tuple[torch.Tensor]:
         """forward pass for the encoder layer"""
 
         # (batch_size, input_seq_len, d_model)
-        attn_output, _ = self.mha(
-            query=inputs, key=inputs, value=inputs, need_weights=False, attn_mask=mask
+        attn_output, attn_weights = self.mha(
+            query=inputs,
+            key=inputs,
+            value=inputs,
+            need_weights=self.training,
+            attn_mask=mask,
         )
+        attn_output = self.dropout1(attn_output)
         # (batch_size, input_seq_len, d_model)
         out1 = self.layernorm1(inputs + attn_output)
 
@@ -120,7 +130,82 @@ class EncoderLayer(nn.Module):
         # (batch_size, input_seq_len, d_model)
         out2 = self.layernorm2(out1 + ffn_output)
 
-        return out2
+        return out2, attn_weights
+
+
+class DecoderLayer(nn.Module):
+    """Base decoder layer"""
+
+    def __init__(
+        self, d_model: int = 512, num_heads: int = 1, dff: int = 2048, rate: float = 0.1
+    ) -> None:
+        """Initialization"""
+        super().__init__()
+
+        self.mha1 = nn.MultiheadAttention(
+            d_model, num_heads, dropout=rate, bias=True, batch_first=True
+        )
+        self.mha2 = nn.MultiheadAttention(
+            d_model, num_heads, dropout=rate, bias=True, batch_first=True
+        )
+
+        self.ffn = point_wise_feed_forward_network(d_model, dff)
+
+        self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6)
+        self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
+        self.layernorm3 = nn.LayerNorm(d_model, eps=1e-6)
+
+        self.dropout1 = nn.Dropout(rate)
+        self.dropout2 = nn.Dropout(rate)
+        self.dropout3 = nn.Dropout(rate)
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        enc_output: torch.Tensor,
+        look_ahead_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor]:
+        """forward pass
+
+        Args:
+            inputs (torch.Tensor): [description]
+            enc_output (torch.Tensor): [description]
+            look_ahead_mask (torch.Tensor): causal mask
+
+        Returns:
+            Tuple[torch.Tensor]: [description]
+        """
+        # enc_output.shape == (batch_size, input_seq_len, d_model)
+
+        # (batch_size, target_seq_len, d_model)
+        attn1, attn_weights_block1 = self.mha1(
+            query=inputs,
+            key=inputs,
+            value=inputs,
+            need_weights=self.training,
+            attn_mask=look_ahead_mask,
+        )
+        attn1 = self.dropout1(attn1)
+        out1 = self.layernorm1(attn1 + inputs)
+
+        # (batch_size, target_seq_len, d_model)
+        attn2, attn_weights_block2 = self.mha2(
+            query=out1,
+            key=enc_output,
+            value=enc_output,
+            need_weights=self.training,
+            attn_mask=None,
+        )
+        attn2 = self.dropout2(attn2)
+        # (batch_size, target_seq_len, d_model)
+        out2 = self.layernorm2(attn2 + out1)
+        # (batch_size, target_seq_len, d_model)
+        ffn_output = self.ffn(out2)
+        ffn_output = self.dropout3(ffn_output)
+        # (batch_size, target_seq_len, d_model)
+        out3 = self.layernorm3(ffn_output + out2)
+
+        return out3, attn_weights_block1, attn_weights_block2
 
 
 class TransformerEncoderBlock(nn.Module):
@@ -208,7 +293,6 @@ class PositionalEmbedding(nn.Module):
         return embedded_tokens + embedded_positions
 
 
-# pylint: disable = too-many-instance-attributes, too-many-arguments
 class TransformerDecoderBlock(nn.Module):
     """decoder model for translating image embeddings to sequence based on input words"""
 
@@ -382,4 +466,4 @@ if __name__ == "__main__":  # pragma: no cover
     # MASK = (a > 4 - 1).to(float)
     # d = decoder(a, c, mask=MASK)
     # print(d.detach().numpy().shape)
-    enl = EncoderLayer()
+    dec = DecoderLayer()
