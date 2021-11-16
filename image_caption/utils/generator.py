@@ -139,9 +139,6 @@ class CaptionDataset(Dataset):
 
         self.images = list(self.captions.keys())
 
-        # # Fixed length allowed for any sequence
-        # self.seq_len = seq_length
-
     def __len__(self):
         return len(self.images)
 

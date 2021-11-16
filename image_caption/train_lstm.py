@@ -102,11 +102,8 @@ def generators(
     train_dataset = CaptionDataset(seq_length=seq_length, transform=train_transform)
     # Get the vocabulary
     vocab = train_dataset.vocab
-    loss_weights = torch.Tensor(train_dataset.vocab.weights)
 
-    ignore_indices = [vocab.stoi["<PAD>"], vocab.stoi["<UNK>"]]
     pad_value = vocab.stoi["<PAD>"]
-
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
@@ -126,14 +123,7 @@ def generators(
         pin_memory=True,
         collate_fn=Collate(pad_value, num_captions=5),
     )
-    # if not self.use_pretrained:
-    #     self.text_embed_size = self.image_embed_size
-    #     return vocab_size, train_loader, valid_loader, None
-
-    embedding_matrix, text_embed_size = prepare_embeddings(
-        "datasets/token_embeds", train_dataset.vocab, image_embed_size
-    )
-    return vocab, train_loader, valid_loader, embedding_matrix
+    return vocab, train_loader, valid_loader
 
 
 def main(num_workers: int = 4):
@@ -142,7 +132,7 @@ def main(num_workers: int = 4):
     """
 
     global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, vocab
-    vocab, train_loader, valid_loader, embedding_matrix = generators(
+    vocab, train_loader, valid_loader = generators(
         seq_length=25, batch_size=batch_size, num_workers=num_workers
     )
     vocab_size = len(vocab)
@@ -154,9 +144,6 @@ def main(num_workers: int = 4):
             decoder_dim=decoder_dim,
             vocab_size=vocab_size,
             dropout=dropout,
-        )
-        decoder.embedding.weight = nn.Parameter(
-            torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
         )
         decoder_optimizer = Adam(
             params=filter(lambda p: p.requires_grad, decoder.parameters()),
@@ -454,6 +441,7 @@ def validate(
                         reference_caps.append([caption])
                     else:
                         reference_caps[index].append(caption)
+
             # Store references (true captions), and hypothesis (prediction) for each image
             # for n images, with n hypotheses, and references a, b, c... for each image
             # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...]
