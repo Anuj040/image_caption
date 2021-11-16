@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from image_caption.models import (
     CNNModel,
+    Transformer,
     TransformerDecoderBlock,
     TransformerEncoderBlock,
 )
@@ -174,36 +175,14 @@ class Caption:
         cnn_model: nn.Module = CNNModel(
             img_embd_size=self.input_embed_size, trainable=self.trainable
         ).to(DEVICE)
-        self.encoder: nn.Module = TransformerEncoderBlock(
-            self.image_embed_size,
-            num_heads=self.num_heads,
-            input_embed_size=self.input_embed_size,
-        ).to(DEVICE)
-        self.decoder: nn.Module = TransformerDecoderBlock(
-            vocab_size,
-            seq_length,
-            self.text_embed_size,
-            self.image_embed_size,
-            self.ff_dim,
-            4 * self.num_heads,
-            # self.num_heads,
-            self.use_alibi,
-        ).to(DEVICE)
-
-        if self.use_pretrained and reload_path is not None:
-            # Substitute pretrained embeddings for embedding layer
-            self.decoder.embedding.token_embeddings.weight = nn.Parameter(
-                torch.tensor(embedding_matrix, dtype=torch.float32).to(DEVICE)
-            )
+        self.transformer = Transformer(
+            input_embed_size=self.input_embed_size, vocab_size=vocab_size
+        )
 
         # Prepare the optimizer & loss functions
         lrate = 1e-4 * batch_size / 64
-        optimizer = Adam(
-            [
-                {"params": self.encoder.parameters(), "lr": 1e-9},
-                {"params": self.decoder.parameters(), "lr": 1e-9},
-            ]
-        )
+
+        optimizer = Adam(self.transformer.parameters(), lr=1e-6)
         swa_scheduler = torch.optim.swa_utils.SWALR(
             optimizer,
             anneal_strategy="cos",
@@ -237,8 +216,8 @@ class Caption:
             start_epoch = 0
             # Logging and checkpoints
             now = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
-            os.makedirs(f"checkpoint/{now}", exist_ok=True)
-            writer = SummaryWriter(f"log/{now}")
+            os.makedirs(f"transformer/checkpoint/{now}", exist_ok=True)
+            writer = SummaryWriter(f"transformer/log/{now}")
 
             # Initialize validation loss
             valid_loss = -1e9
@@ -249,8 +228,7 @@ class Caption:
         cnn_model.eval()
         for epoch in range(start_epoch, epochs):
 
-            self.encoder.train()
-            self.decoder.train()
+            self.transformer.train()
             scheduler = (
                 swa_scheduler if epoch < scheduler_switch_epoch else plt_scheduler
             )
@@ -293,12 +271,11 @@ class Caption:
                 torch.save(
                     {
                         "epoch": epoch + 1,
-                        "encoder": self.encoder.state_dict(),
-                        "decoder": self.decoder.state_dict(),
+                        "model": self.transformer.state_dict(),
                         "optim_state": optimizer.state_dict(),
                         "scheduler": scheduler.state_dict(),
                     },
-                    f"checkpoint/{now}/model-{epoch+1:04d}-{valid_loss:.4f}.pth",
+                    f"transformer/checkpoint/{now}/model-{epoch+1:04d}-{valid_loss:.4f}.pth",
                 )
             # Update l_rates
             scheduler.step() if epoch < scheduler_switch_epoch else scheduler.step(
@@ -401,7 +378,6 @@ class Caption:
             Tuple[torch.Tensor]: loss/acc values
         """
 
-        encoder_out = self.encoder(img_embed)
         batch_seq_inp = batch_seq[:, :-1]
         batch_seq_true = batch_seq[:, 1:].long()
 
@@ -414,8 +390,8 @@ class Caption:
             temp_mask = torch.not_equal(batch_seq_true, token_index).to(float)
             dec_mask = torch.minimum(dec_mask, temp_mask)
 
-        batch_seq_pred = self.decoder(
-            batch_seq_inp, encoder_out, mask=enc_mask.to(DEVICE)
+        batch_seq_pred, _, _ = self.transformer(
+            img_embed, batch_seq_inp, mask=enc_mask.to(DEVICE)
         )
         batch_seq_pred = batch_seq_pred.permute(0, 2, 1)
         loss = self.calculate_loss(
@@ -423,7 +399,7 @@ class Caption:
         )
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, dec_mask)
 
-        del encoder_out, batch_seq, batch_seq_inp, batch_seq_true
+        del img_embed, batch_seq, batch_seq_inp, batch_seq_true
         del enc_mask, dec_mask, batch_seq_pred
         return loss, acc
 
@@ -447,8 +423,7 @@ class Caption:
         Returns:
             float: validation acc.
         """
-        self.encoder.eval()
-        self.decoder.eval()
+        self.transformer.eval()
         loss_total = 0
         loss_count = 0
         acc_mean = 0
@@ -620,16 +595,16 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    MODEL_PATH = "transform_log/checkpoint_colab/scale/model-0019-0.3893.pth"
-    # model.train(
-    #     seq_length=25,
-    #     epochs=40,
-    #     batch_size=4,
-    #     num_workers=4,
-    #     reload_path=MODEL_PATH,
-    # )
-    model.beam_infer(
+    MODEL_PATH = None  # "transform_log/checkpoint_colab/scale/model-0019-0.3893.pth"
+    model.train(
         seq_length=25,
-        beam_size=1,
+        epochs=40,
+        batch_size=64,
+        num_workers=4,
         reload_path=MODEL_PATH,
     )
+    # model.beam_infer(
+    #     seq_length=25,
+    #     beam_size=1,
+    #     reload_path=MODEL_PATH,
+    # )

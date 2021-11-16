@@ -307,6 +307,7 @@ class Transformer(nn.Module):
     def __init__(
         self,
         num_layers: int = 1,
+        input_embed_size: int = 1280,
         d_model: int = 512,
         num_heads: int = 1,
         dff: int = 2048,
@@ -317,18 +318,26 @@ class Transformer(nn.Module):
         """initialization"""
         super().__init__()
         self.num_heads = num_heads
+
+        self.dense_1 = nn.Linear(input_embed_size, d_model, bias=True)
+        self.layernorm_1 = nn.LayerNorm(input_embed_size)
+
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, rate)
 
         self.decoder = Decoder(
             num_layers, d_model, num_heads, dff, vocab_size, max_pos_encode, rate
         )
 
-        self.final_layer = nn.Softmax(dim=-1)
+        self.final_layer = nn.Sequential(
+            *[nn.Linear(d_model, vocab_size), nn.Softmax(dim=-1)]
+        )
 
     def forward(
         self, imgs: torch.Tensor, tar: torch.Tensor, mask: torch.Tensor = None
     ) -> torch.Tensor:
         """forward"""
+        imgs = self.dense_1(self.layernorm_1(imgs))
+
         if mask is not None:
             causal_mask = self.get_causal_attention_mask(tar)
             combined_mask = torch.unsqueeze(mask, 1)
@@ -343,6 +352,7 @@ class Transformer(nn.Module):
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
         dec_output, decoder_attns = self.decoder(tar, enc_output, combined_mask)
+
         # (batch_size, seq_len, vocab_size)
         final_output = self.final_layer(dec_output)
 
