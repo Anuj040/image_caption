@@ -2,8 +2,9 @@
 datasets
 .venv
 .vscode
-checkpoint
-log
+checkpoint*
+log*
+lstm_logs
 
 # poetry files
 poetry.lock
@@ -11,3 +12,6 @@ poetry.lock
 # Binaries
 .DS_Store
 __pycache__/
+
+# Scripts
+test.py

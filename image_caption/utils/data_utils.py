@@ -1,10 +1,11 @@
 """utilities for data processing"""
 import os
 import zipfile
-from typing import Tuple
+from typing import Callable, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
 
 np.random.seed(123)
 
@@ -65,12 +66,16 @@ def load_captions_data(
 
 
 def train_val_split(
-    caption_data: dict, train_size: float = 0.8, shuffle: bool = True
+    caption_data: dict,
+    numericalizer: Callable,
+    train_size: float = 0.8,
+    shuffle: bool = True,
 ) -> Tuple[dict]:
     """Split the captioning dataset into train and validation sets.
 
     Args:
         caption_data (dict): Dictionary containing the mapped caption data
+        numericalizer (Callable): vectorize the input sequence
         train_size (float): Fraction of all the full dataset to use as training data
         shuffle (bool): Whether to shuffle the dataset before splitting
 
@@ -89,10 +94,18 @@ def train_val_split(
     train_size = int(len(caption_data) * train_size)
 
     training_data = {
-        img_name: caption_data[img_name] for img_name in all_images[:train_size]
+        img_name: [
+            torch.Tensor(numericalizer(caption)).to(dtype=torch.int32)
+            for caption in caption_data[img_name]
+        ]
+        for img_name in all_images[:train_size]
     }
     validation_data = {
-        img_name: caption_data[img_name] for img_name in all_images[train_size:]
+        img_name: [
+            torch.Tensor(numericalizer(caption)).to(dtype=torch.int32)
+            for caption in caption_data[img_name]
+        ]
+        for img_name in all_images[train_size:]
     }
 
     # 4. Return the splits
@@ -137,20 +150,16 @@ def prepare_embeddings(path: str, vocab: dict, embed_dim: int = 100) -> np.ndarr
     glove = pd.read_csv(glove_path, sep=" ", quoting=3, header=None, index_col=0)
     glove_embedding = {key: val.values for key, val in glove.T.items()}
 
-    embedding_matrix = np.zeros((len(vocab) + 1, embed_dim))
-    not_in_glove_index = []
+    # Get the statistics of existing embeds
+    embedding_vals = np.vstack(list(glove_embedding.values()))
+    std = np.std(embedding_vals)
+    embed_mu = np.mean(embedding_vals)
+
+    # Initialize randomly to have random embeds for unavailbale tokens
+    embedding_matrix = embed_mu + std * np.random.randn(len(vocab), embed_dim)
+
     for word, index in vocab.stoi.items():
         if word in glove_embedding:
             embedding_matrix[index] = glove_embedding[word]
-        else:
-            not_in_glove_index.append(index)
 
-    embed_dim_ext = len(not_in_glove_index)
-    expanded_embedding_matrix = np.zeros((len(vocab) + 1, embed_dim + embed_dim_ext))
-    expanded_embedding_matrix[..., :embed_dim] = embedding_matrix
-    placeholder = embed_dim
-    for index in not_in_glove_index:
-        expanded_embedding_matrix[index, placeholder] = 1.0
-        placeholder += 1
-
-    return expanded_embedding_matrix, embed_dim + embed_dim_ext
+    return embedding_matrix, embed_dim
