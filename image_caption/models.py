@@ -208,6 +208,41 @@ class DecoderLayer(nn.Module):
         return out3, attn_weights_block1, attn_weights_block2
 
 
+class Encoder(nn.Module):
+    """Encoder block"""
+
+    def __init__(
+        self,
+        num_layers: int,
+        d_model: int = 512,
+        num_heads: int = 1,
+        dff: int = 2048,
+        rate: float = 0.1,
+    ):
+        """Initialization"""
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_layers = num_layers
+
+        self.enc_layers = [
+            EncoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)
+        ]
+
+        self.dropout = nn.Dropout(rate)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """forward pass"""
+        # Image embeddings
+        # (batch_size, pixels, d_model)
+        embeds = self.dropout(inputs)
+
+        for i in range(self.num_layers):
+            embeds, _ = self.enc_layers[i](embeds, mask=None)
+        # (batch_size, encoded_pixels, d_model)
+        return embeds
+
+
 class TransformerEncoderBlock(nn.Module):
     """encoder model for transforming image embeddings to one relatable to sequence embeddings"""
 
@@ -466,4 +501,4 @@ if __name__ == "__main__":  # pragma: no cover
     # MASK = (a > 4 - 1).to(float)
     # d = decoder(a, c, mask=MASK)
     # print(d.detach().numpy().shape)
-    dec = DecoderLayer()
+    dec = Encoder(num_layers=1)
