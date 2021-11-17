@@ -117,7 +117,7 @@ class EncoderLayer(nn.Module):
             query=inputs,
             key=inputs,
             value=inputs,
-            need_weights=self.training,
+            need_weights=not self.training,
             attn_mask=mask,
         )
         attn_output = self.dropout1(attn_output)
@@ -176,13 +176,12 @@ class DecoderLayer(nn.Module):
             Tuple[torch.Tensor]: [description]
         """
         # enc_output.shape == (batch_size, input_seq_len, d_model)
-
         # (batch_size, target_seq_len, d_model)
         attn1, attn_weights_block1 = self.mha1(
             query=inputs,
             key=inputs,
             value=inputs,
-            need_weights=self.training,
+            need_weights=not self.training,
             attn_mask=look_ahead_mask,
         )
         attn1 = self.dropout1(attn1)
@@ -193,7 +192,7 @@ class DecoderLayer(nn.Module):
             query=out1,
             key=enc_output,
             value=enc_output,
-            need_weights=self.training,
+            need_weights=not self.training,
             attn_mask=None,
         )
         attn2 = self.dropout2(attn2)
@@ -225,9 +224,9 @@ class Encoder(nn.Module):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.enc_layers = [
-            EncoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)
-        ]
+        self.enc_layers = nn.ModuleList(
+            [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)]
+        )
 
         self.dropout = nn.Dropout(rate)
 
@@ -270,10 +269,9 @@ class Decoder(nn.Module):
             use_alibi=False,
         )
 
-        self.dec_layers = [
-            DecoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)
-        ]
-
+        self.dec_layers = nn.ModuleList(
+            [DecoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)]
+        )
         self.dropout = nn.Dropout(rate)
 
     def forward(
@@ -283,7 +281,6 @@ class Decoder(nn.Module):
         look_ahead_mask: torch.Tensor = None,
     ) -> torch.Tensor:
         """forward pass"""
-
         attention_weights = {}
         # adding embedding and position encoding.
         # (batch_size, input_seq_len, d_model)
@@ -337,7 +334,6 @@ class Transformer(nn.Module):
     ) -> torch.Tensor:
         """forward"""
         imgs = self.dense_1(self.layernorm_1(imgs))
-
         if mask is not None:
             causal_mask = self.get_causal_attention_mask(tar)
             combined_mask = torch.unsqueeze(mask, 1)
