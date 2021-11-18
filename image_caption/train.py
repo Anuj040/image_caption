@@ -40,6 +40,7 @@ class Caption:
         image_embed_size: int = 300,
         use_pretrained: bool = True,
         use_alibi: bool = False,
+        with_mask: bool = False,
     ) -> None:
         # number of captions for each image
         self.num_captions: int = 5
@@ -57,9 +58,13 @@ class Caption:
         self.input_embed_size: int = 1280
 
         self.trainable = trainable
+        self.with_mask = with_mask
 
     def generators(
-        self, seq_length: int, batch_size: int, num_workers: int = 8
+        self,
+        seq_length: int,
+        batch_size: int,
+        num_workers: int = 8,
     ) -> Tuple[int, DataLoader, DataLoader, Optional[np.ndarray]]:
         """prepares data loader objects for model training and evaluation
 
@@ -95,7 +100,9 @@ class Caption:
         )
 
         # Prepare the dataloaders
-        train_dataset = CaptionDataset(seq_length=seq_length, transform=train_transform)
+        train_dataset = CaptionDataset(
+            seq_length=seq_length, transform=train_transform, with_mask=self.with_mask
+        )
         vocab_size = len(train_dataset.vocab)
         self.loss_weights = torch.Tensor(train_dataset.vocab.weights)
 
@@ -144,8 +151,7 @@ class Caption:
         """
         print(f"=> loading checkpoint '{path}'")
         checkpoint = torch.load(path, map_location=torch.device(DEVICE))
-        self.encoder.load_state_dict(checkpoint["encoder"])
-        self.decoder.load_state_dict(checkpoint["decoder"])
+        self.transformer.load_state_dict(checkpoint["model"])
         return checkpoint["epoch"], checkpoint["optim_state"], checkpoint["scheduler"]
 
     # pylint: disable = too-many-arguments, too-many-statements
@@ -170,13 +176,17 @@ class Caption:
         vocab_size, train_loader, valid_loader, embedding_matrix = self.generators(
             seq_length, batch_size, num_workers
         )
-
         # Model definitions
         cnn_model: nn.Module = CNNModel(
             img_embd_size=self.input_embed_size, trainable=self.trainable
         ).to(DEVICE)
         self.transformer = Transformer(
-            input_embed_size=self.input_embed_size, vocab_size=vocab_size
+            num_layers=2,
+            d_model=512,
+            num_heads=2,
+            dff=2048,
+            input_embed_size=self.input_embed_size,
+            vocab_size=vocab_size,
         ).to(DEVICE)
 
         # Prepare the optimizer & loss functions
@@ -204,7 +214,7 @@ class Caption:
 
             # Logging and checkpoints
             now = os.path.basename(os.path.dirname(reload_path))
-            writer = SummaryWriter(f"log/{now}")
+            writer = SummaryWriter(f"transformer/log/{now}")
 
             loss_regex = r"-(\d*.\d{4})"
             matches = re.search(loss_regex, os.path.basename(reload_path))
@@ -223,7 +233,6 @@ class Caption:
             valid_loss = -1e9
 
         scaler = GradScaler(enabled=torch.cuda.is_available())
-
         # Run loop
         cnn_model.eval()
         for epoch in range(start_epoch, epochs):
@@ -235,18 +244,21 @@ class Caption:
             print(
                 f"========= Runnnig epoch {epoch+1:04d} of {epochs:04d} epochs. ========="
             )
-            for i, (imgs, captions, _) in enumerate(tqdm(train_loader)):
+            for i, (imgs, captions, targets, _) in enumerate(tqdm(train_loader)):
                 step = epoch * len(train_loader) + i + 1
                 imgs = imgs.to(DEVICE)
                 img_embed = cnn_model(imgs)
 
                 batch_loss = 0.0
                 batch_acc = 0.0
-                for caption in captions:
+                for caption, target in zip(captions, targets):
                     optimizer.step()
                     with autocast(enabled=torch.cuda.is_available()):
                         loss, acc = self._compute_caption_loss_and_acc(
-                            img_embed, caption.to(DEVICE), self.loss_weights
+                            img_embed,
+                            caption.to(DEVICE),
+                            target.to(DEVICE),
+                            self.loss_weights,
                         )
                     scaler.scale(loss).backward(retain_graph=True)
                     scaler.step(optimizer)
@@ -256,7 +268,7 @@ class Caption:
                     batch_loss += loss
                     batch_acc += acc
 
-                del img_embed, imgs, captions
+                del img_embed, imgs, captions, targets
 
                 if (i + 1) % int(50 * 8 / batch_size) == 0:
                     writer.add_scalar("loss", batch_loss / self.num_captions, step)
@@ -359,6 +371,7 @@ class Caption:
         self,
         img_embed: torch.Tensor,
         batch_seq: torch.Tensor,
+        target_seq: torch.Tensor,
         loss_weights: torch.Tensor = None,
         mode: str = "train",
     ) -> Tuple[torch.Tensor]:
@@ -379,7 +392,7 @@ class Caption:
         """
 
         batch_seq_inp = batch_seq[:, :-1]
-        batch_seq_true = batch_seq[:, 1:].long()
+        batch_seq_true = target_seq[:, 1:].long()
 
         # Ignore tokens <UNK>, <PAD>, etc.
         enc_mask = torch.not_equal(batch_seq_inp, self.ignore_indices[0]).to(float)
@@ -399,7 +412,7 @@ class Caption:
         )
         acc = self.calculate_accuracy(batch_seq_true, batch_seq_pred, dec_mask)
 
-        del img_embed, batch_seq, batch_seq_inp, batch_seq_true
+        del img_embed, batch_seq, target_seq, batch_seq_inp, batch_seq_true
         del enc_mask, dec_mask, batch_seq_pred
         return loss, acc
 
@@ -428,7 +441,7 @@ class Caption:
         loss_count = 0
         acc_mean = 0
         with torch.no_grad():
-            for (imgs, captions, _) in loader:
+            for (imgs, _, captions, _) in loader:
                 batch_size = imgs.size(0)
                 imgs = imgs.to(DEVICE)
 
@@ -437,7 +450,7 @@ class Caption:
                 batch_acc = 0.0
                 for caption in captions:
                     loss, acc = self._compute_caption_loss_and_acc(
-                        img_embed, caption.to(DEVICE), mode="valid"
+                        img_embed, caption.to(DEVICE), caption.to(DEVICE), mode="valid"
                     )
                     batch_loss += loss
                     batch_acc += acc
@@ -467,7 +480,7 @@ class Caption:
             reload_path (Optional[str], optional): Checkpoint path
         """
         # Data augmentation for image data
-        image_size = (224, 224)
+        image_size = (256, 224)
         img_transform = transforms.Compose(
             [
                 transforms.Resize(image_size),
@@ -476,7 +489,7 @@ class Caption:
             ]
         )
         # Prepare the vocab
-        train_dataset = CaptionDataset(seq_length=seq_length)
+        train_dataset = CaptionDataset(seq_length=seq_length, with_mask=self.with_mask)
         vocab = train_dataset.vocab
         vocab_size = len(vocab)
 
@@ -485,7 +498,12 @@ class Caption:
             img_embd_size=self.input_embed_size, trainable=self.trainable
         ).to(DEVICE)
         transformer: nn.Module = Transformer(
-            input_embed_size=self.input_embed_size, vocab_size=vocab_size
+            num_layers=2,
+            d_model=512,
+            num_heads=2,
+            dff=2048,
+            input_embed_size=self.input_embed_size,
+            vocab_size=vocab_size,
         ).to(DEVICE)
         print(f"=> loading checkpoint '{reload_path}'")
         checkpoint = torch.load(reload_path, map_location=torch.device(DEVICE))
@@ -494,6 +512,9 @@ class Caption:
         images = [
             "datasets/Flicker8k_Dataset/1002674143_1b742ab4b8.jpg",
             "datasets/Flicker8k_Dataset/1030985833_b0902ea560.jpg",
+            "datasets/Flicker8k_Dataset/23445819_3a458716c1.jpg",
+            "datasets/Flicker8k_Dataset/3649382413_58a4b1efe8.jpg",
+            "datasets/Flicker8k_Dataset/3666324102_18ecdf8253.jpg",
         ]
 
         cnn_model.eval()
@@ -582,17 +603,19 @@ class Caption:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    model = Caption(trainable=False, use_pretrained=False, use_alibi=False)
-    MODEL_PATH = "transformer/checkpoint/16112021_210756/model-0005-0.2683.pth"
-    # model.train(
-    #     seq_length=25,
-    #     epochs=40,
-    #     batch_size=64,
-    #     num_workers=4,
-    #     reload_path=MODEL_PATH,
-    # )
-    model.beam_infer(
+    model = Caption(
+        trainable=False, use_pretrained=False, use_alibi=False, with_mask=True
+    )
+    MODEL_PATH = None  # "transformer/checkpoint/17112021_064432/model-0016-0.4342.pth"
+    model.train(
         seq_length=25,
-        beam_size=3,
+        epochs=40,
+        batch_size=64,
+        num_workers=4,
         reload_path=MODEL_PATH,
     )
+    # model.beam_infer(
+    #     seq_length=25,
+    #     beam_size=3,
+    #     reload_path=MODEL_PATH,
+    # )

@@ -3,6 +3,7 @@ data generator module
 https://www.kaggle.com/fanbyprinciple/pytorch-image-captioning-with-flickr/notebook
 """
 import os
+import random
 import re
 from typing import Callable, List, Tuple
 
@@ -102,6 +103,7 @@ class CaptionDataset(Dataset):
         transform=None,
         seq_length: int = 25,
         split: str = "train",
+        with_mask: bool = False,
     ) -> None:
         """Initializes
 
@@ -115,6 +117,7 @@ class CaptionDataset(Dataset):
         """
         self.transform = transform
         self.root_dir = root_dir
+        self.with_mask = with_mask
 
         caption_path = os.path.join(root_dir, caption_file)
         images_path = os.path.join(root_dir, "Flicker8k_Dataset")
@@ -130,6 +133,11 @@ class CaptionDataset(Dataset):
         # Build the vocab
         self.vocab = Vocabulary(self.custom_standardization)
         self.vocab.build_vocabulary(text_data)
+
+        if with_mask:
+            # Add mask element # Update stoi before itos
+            self.vocab.stoi["<MASK>"] = len(self.vocab)
+            self.vocab.itos[len(self.vocab)] = "<MASK>"
 
         # Prepare the split # Returns vectorized captions
         train_data, valid_data = train_val_split(
@@ -152,11 +160,44 @@ class CaptionDataset(Dataset):
         numericalized_captions = self.captions[image]
         caption_lens = [[len(caption)] for caption in numericalized_captions]
 
-        return img, numericalized_captions, caption_lens
+        if self.with_mask:
+            masked_captions = []
+            output_labels = []
+            # Mask some of the tokens
+            for caption in numericalized_captions:
+                inputs, outputs = self.random_word(caption)
+                masked_captions.append(inputs)
+                output_labels.append(outputs)
+        else:
+            masked_captions = output_labels = numericalized_captions
+
+        return img, masked_captions, caption_lens, output_labels
 
     def custom_standardization(self, input_string):
         """custom function for removing certain specific substrings from the phrase"""
         return re.sub(f"[{re.escape(self.strip_chars)}]", "", input_string)
+
+    def random_word(self, sequence: torch.Tensor) -> Tuple[torch.Tensor]:
+        """Prepares a partially masked input sequence"""
+        output_label = sequence.clone()
+
+        # Skip the <SOS> token
+        for i, _ in enumerate(sequence[1:], start=1):
+            prob = random.random()
+            if prob < 0.15:
+                prob /= 0.15
+
+                # 80% randomly change token to mask token
+                if prob < 0.8:
+                    sequence[i] = self.vocab.stoi["<MASK>"]
+
+                # 10% randomly change token to random token
+                elif prob < 0.9:
+                    sequence[i] = random.randrange(len(self.vocab))
+
+                # 10% randomly leave the token unchanged
+
+        return sequence, output_label
 
 
 class Collate:
@@ -177,19 +218,29 @@ class Collate:
         imgs = [item[0].unsqueeze(0) for item in batch]
         img = torch.cat(imgs, dim=0)
 
-        captions_tensor = []
+        captions_inputs = []
+        captions_targets = []
         captions_lens = []
         for i in range(self.num_captions):
-            targets = [item[1][i] for item in batch]
+            inputs = [item[1][i] for item in batch]
+            inputs = pad_sequence(
+                inputs, batch_first=True, padding_value=self.pad_value
+            )
+            captions_inputs.append(inputs)
+
+            lengths = [item[2][i] for item in batch]
+            captions_lens.append(lengths)
+
+            targets = [item[3][i] for item in batch]
             targets = pad_sequence(
                 targets, batch_first=True, padding_value=self.pad_value
             )
-            captions_tensor.append(targets)
-            lengths = [item[2][i] for item in batch]
-            captions_lens.append(lengths)
+            captions_targets.append(targets)
+
         return (
             img,
-            captions_tensor,
+            captions_inputs,
+            captions_targets,
             torch.Tensor(captions_lens).to(dtype=torch.int32),
         )
 
