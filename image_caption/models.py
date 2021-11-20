@@ -101,8 +101,9 @@ class EncoderLayer(nn.Module):
         )
         self.ffn = point_wise_feed_forward_network(d_model, dff)
 
+        self.layernorm0 = nn.LayerNorm(d_model, eps=1e-6)
         self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6)
-        self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
+        # self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
 
         self.dropout1 = nn.Dropout(rate)
         self.dropout2 = nn.Dropout(rate)
@@ -113,6 +114,7 @@ class EncoderLayer(nn.Module):
         """forward pass for the encoder layer"""
 
         # (batch_size, input_seq_len, d_model)
+        inputs = self.layernorm0(inputs)
         attn_output, attn_weights = self.mha(
             query=inputs,
             key=inputs,
@@ -128,7 +130,7 @@ class EncoderLayer(nn.Module):
         ffn_output = self.ffn(out1)
         ffn_output = self.dropout2(ffn_output)
         # (batch_size, input_seq_len, d_model)
-        out2 = self.layernorm2(out1 + ffn_output)
+        out2 = out1 + ffn_output
 
         return out2, attn_weights
 
@@ -151,9 +153,10 @@ class DecoderLayer(nn.Module):
 
         self.ffn = point_wise_feed_forward_network(d_model, dff)
 
+        self.layernorm0 = nn.LayerNorm(d_model, eps=1e-6)
         self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6)
         self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6)
-        self.layernorm3 = nn.LayerNorm(d_model, eps=1e-6)
+        # self.layernorm3 = nn.LayerNorm(d_model, eps=1e-6)
 
         self.dropout1 = nn.Dropout(rate)
         self.dropout2 = nn.Dropout(rate)
@@ -177,6 +180,7 @@ class DecoderLayer(nn.Module):
         """
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # (batch_size, target_seq_len, d_model)
+        inputs = self.layernorm0(inputs)
         attn1, attn_weights_block1 = self.mha1(
             query=inputs,
             key=inputs,
@@ -202,7 +206,7 @@ class DecoderLayer(nn.Module):
         ffn_output = self.ffn(out2)
         ffn_output = self.dropout3(ffn_output)
         # (batch_size, target_seq_len, d_model)
-        out3 = self.layernorm3(ffn_output + out2)
+        out3 = ffn_output + out2
 
         return out3, attn_weights_block1, attn_weights_block2
 
@@ -317,7 +321,8 @@ class Transformer(nn.Module):
         self.num_heads = num_heads
 
         self.dense_1 = nn.Linear(input_embed_size, d_model, bias=True)
-        self.layernorm_1 = nn.LayerNorm(input_embed_size)
+        self.layernorm_1 = nn.LayerNorm(input_embed_size, eps=1e-6)
+        self.layernorm_2 = nn.LayerNorm(d_model, eps=1e-6)
 
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, rate)
 
@@ -347,6 +352,7 @@ class Transformer(nn.Module):
         enc_output, encoder_attns = self.encoder(imgs)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
+        enc_output = self.layernorm_2(enc_output)
         dec_output, decoder_attns = self.decoder(tar, enc_output, combined_mask)
 
         # (batch_size, seq_len, vocab_size)
