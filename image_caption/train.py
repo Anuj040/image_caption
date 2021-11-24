@@ -192,25 +192,15 @@ class Caption:
         # Prepare the optimizer & loss functions
         lrate = 1e-4 * batch_size / 64
 
-        optimizer = Adam(self.transformer.parameters(), lr=1e-6)
-        swa_scheduler = torch.optim.swa_utils.SWALR(
-            optimizer,
-            anneal_strategy="cos",
-            anneal_epochs=2,
-            swa_lr=lrate,
-        )
-        plt_scheduler = ReduceLROnPlateau(optimizer, "max", factor=0.5, patience=5)
-        scheduler_switch_epoch = 15
+        optimizer = Adam(self.transformer.parameters(), lr=lrate)
+        scheduler = ReduceLROnPlateau(optimizer, "max", factor=0.5, patience=5)
         if reload_path is not None:
             # Resume from checkpoint
             start_epoch, optim_state, scheduler_state = self.get_current_state(
                 reload_path
             )
             optimizer.load_state_dict(optim_state)
-            if start_epoch > scheduler_switch_epoch:
-                swa_scheduler.load_state_dict(scheduler_state)
-            else:
-                plt_scheduler.load_state_dict(scheduler_state)
+            scheduler.load_state_dict(scheduler_state)
 
             # Logging and checkpoints
             now = os.path.basename(os.path.dirname(reload_path))
@@ -238,9 +228,6 @@ class Caption:
         for epoch in range(start_epoch, epochs):
 
             self.transformer.train()
-            scheduler = (
-                swa_scheduler if epoch < scheduler_switch_epoch else plt_scheduler
-            )
             print(
                 f"========= Runnnig epoch {epoch+1:04d} of {epochs:04d} epochs. ========="
             )
@@ -290,9 +277,7 @@ class Caption:
                     f"transformer/checkpoint/{now}/model-{epoch+1:04d}-{valid_loss:.4f}.pth",
                 )
             # Update l_rates
-            scheduler.step() if epoch < scheduler_switch_epoch else scheduler.step(
-                valid_loss
-            )
+            scheduler.step(valid_loss)
 
     @staticmethod
     def calculate_loss(
@@ -551,7 +536,7 @@ class Caption:
                         encoded_img,
                         None,
                     )
-                    pred = transformer.final_layer(pred)
+                    pred = torch.log(transformer.final_layer(pred))
                     # Add # (s, vocab_size)
                     pred = top_k_scores.expand_as(pred[:, -1]) + pred[:, -1]
                     if step == 1:
@@ -606,16 +591,16 @@ if __name__ == "__main__":  # pragma: no cover
     model = Caption(
         trainable=False, use_pretrained=False, use_alibi=False, with_mask=True
     )
-    MODEL_PATH = None  # "transformer/checkpoint/17112021_064432/model-0016-0.4342.pth"
-    model.train(
-        seq_length=25,
-        epochs=40,
-        batch_size=64,
-        num_workers=4,
-        reload_path=MODEL_PATH,
-    )
-    # model.beam_infer(
+    MODEL_PATH = "transformer/checkpoint/20112021_051013/model-0029-0.4904.pth"
+    # model.train(
     #     seq_length=25,
-    #     beam_size=3,
+    #     epochs=40,
+    #     batch_size=32,
+    #     num_workers=4,
     #     reload_path=MODEL_PATH,
     # )
+    model.beam_infer(
+        seq_length=25,
+        beam_size=3,
+        reload_path=MODEL_PATH,
+    )
