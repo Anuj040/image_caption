@@ -330,7 +330,14 @@ class Transformer(nn.Module):
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, rate)
 
         self.decoder = Decoder(
-            num_layers, d_model, num_heads, dff, vocab_size, max_pos_encode, rate
+            num_layers,
+            d_model,
+            num_heads,
+            dff,
+            vocab_size,
+            max_pos_encode,
+            rate,
+            use_alibi,
         )
 
         self.final_layer = nn.Sequential(
