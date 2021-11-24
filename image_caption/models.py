@@ -259,6 +259,7 @@ class Decoder(nn.Module):
         vocab_size: int = 10000,
         max_pos_encode: int = 50,
         rate: float = 0.1,
+        use_alibi: bool = False,
     ):
         """Initialization"""
         super().__init__()
@@ -270,7 +271,7 @@ class Decoder(nn.Module):
             embed_dim=d_model,
             sequence_length=max_pos_encode,
             vocab_size=vocab_size,
-            use_alibi=False,
+            use_alibi=use_alibi,
         )
 
         self.dec_layers = nn.ModuleList(
@@ -315,10 +316,12 @@ class Transformer(nn.Module):
         vocab_size: int = 10000,
         max_pos_encode: int = 50,
         rate: float = 0.1,
+        use_alibi: bool = False,
     ):
         """initialization"""
         super().__init__()
         self.num_heads = num_heads
+        self.use_alibi = use_alibi
 
         self.dense_1 = nn.Linear(input_embed_size, d_model, bias=True)
         self.layernorm_1 = nn.LayerNorm(input_embed_size, eps=1e-6)
@@ -340,13 +343,28 @@ class Transformer(nn.Module):
         """forward"""
         imgs = self.dense_1(self.layernorm_1(imgs))
         if mask is not None:
-            causal_mask = self.get_causal_attention_mask(tar)
-            combined_mask = torch.unsqueeze(mask, 1)
-            combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
-            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
+            if self.use_alibi:
+                causal_mask = get_alibi_mask(tar, self.num_heads).to(DEVICE)
+                combined_mask = 1.0 - torch.unsqueeze(mask, 1)
+                new_attn_mask = torch.zeros_like(combined_mask, dtype=torch.float)
+                new_attn_mask.masked_fill_(combined_mask.to(bool), float("-inf"))
+                new_attn_mask = torch.tile(new_attn_mask, [self.num_heads, 1, 1])
+                combined_mask = causal_mask + new_attn_mask
+            else:
+                causal_mask = self.get_causal_attention_mask(tar)
+                combined_mask = torch.unsqueeze(mask, 1)
+                combined_mask = 1.0 - torch.minimum(combined_mask, causal_mask)
+                combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
+                    bool
+                )
         else:
-            combined_mask = 1.0 - self.get_causal_attention_mask(tar)
-            combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(bool)
+            if self.use_alibi:
+                combined_mask = get_alibi_mask(tar, self.num_heads).to(DEVICE)
+            else:
+                combined_mask = 1.0 - self.get_causal_attention_mask(tar)
+                combined_mask = torch.tile(combined_mask, [self.num_heads, 1, 1]).to(
+                    bool
+                )
 
         # (batch_size, #pixels, d_model)
         enc_output, encoder_attns = self.encoder(imgs)

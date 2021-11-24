@@ -187,6 +187,7 @@ class Caption:
             dff=2048,
             input_embed_size=self.input_embed_size,
             vocab_size=vocab_size,
+            use_alibi=self.use_alibi,
         ).to(DEVICE)
 
         # Prepare the optimizer & loss functions
@@ -589,9 +590,9 @@ class Caption:
 
 if __name__ == "__main__":  # pragma: no cover
     model = Caption(
-        trainable=False, use_pretrained=False, use_alibi=False, with_mask=True
+        trainable=False, use_pretrained=False, use_alibi=True, with_mask=True
     )
-    MODEL_PATH = "transformer/checkpoint/20112021_051013/model-0029-0.4904.pth"
+    MODEL_PATH = "transformer/checkpoint/22112021_115953/model-0026-0.4752.pth"
     # model.train(
     #     seq_length=25,
     #     epochs=40,

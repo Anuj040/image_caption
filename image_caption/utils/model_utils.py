@@ -53,7 +53,7 @@ def get_alibi_mask(inputs: torch.Tensor, num_heads: int) -> torch.Tensor:
         torch.Tensor: mask tensor for each atention head
     """
 
-    batch_size, maxpos, _ = inputs.size()
+    batch_size, maxpos = inputs.size()
     slopes = torch.Tensor(get_slopes(num_heads))
     # In the next line, part after * is constructs the diagonal matrix (right matrix in Fig 3).
     # It doesn't give the same matrix as in Fig 3, but one where all rows are identical.
